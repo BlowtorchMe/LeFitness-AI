@@ -63,3 +63,7 @@ celerybeat.pid
 # Jupyter
 .ipynb_checkpoints
 
+# Vercel
+.vercel
+vercel.json.bak
+
