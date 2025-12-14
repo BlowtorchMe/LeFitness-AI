@@ -1,0 +1,20 @@
+# Include production requirements
+-r requirements.txt
+
+# Development tools (not needed for Vercel)
+uvicorn[standard]==0.32.0
+alembic==1.14.0
+
+# Frontend (local development only)
+streamlit==1.28.0
+
+# Task Queue (not compatible with serverless)
+celery==5.3.4
+redis==5.0.1
+
+# Development
+pytest==7.4.3
+pytest-asyncio==0.21.1
+black==23.11.0
+flake8==6.1.0
+

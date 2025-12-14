@@ -1,6 +1,5 @@
-# Core Framework
+# Core Framework (required for FastAPI)
 fastapi==0.115.0
-uvicorn[standard]==0.32.0
 pydantic==2.10.0
 pydantic-settings==2.6.0
 
@@ -9,7 +8,6 @@ openai==1.54.0
 
 # Database
 sqlalchemy==2.0.36
-alembic==1.14.0
 psycopg2-binary==2.9.10
 
 # Integrations
@@ -24,21 +22,7 @@ google-auth-oauthlib==1.1.0
 aiosmtplib==3.0.1
 email-validator==2.1.0
 
-# Task Queue
-celery==5.3.4
-redis==5.0.1
-
 # Utilities
 python-dotenv==1.0.0
 python-multipart==0.0.6
 httpx==0.25.2
-
-# Frontend
-streamlit==1.28.0
-
-# Development
-pytest==7.4.3
-pytest-asyncio==0.21.1
-black==23.11.0
-flake8==6.1.0
-
