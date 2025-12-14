@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     debug: bool = True
     
     # OpenAI
-    openai_api_key: str
+    openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4"
     
     # Twilio SMS (Optional - only needed for SMS features)
@@ -63,8 +63,12 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        env_file_encoding = "utf-8"
+        # Don't fail if .env file doesn't exist (for Vercel)
+        env_file_required = False
 
 
 # Global settings instance
+# Pydantic will use environment variables and defaults
 settings = Settings()
 
