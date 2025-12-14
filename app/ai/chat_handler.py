@@ -14,7 +14,13 @@ class ChatHandler:
     """Handles AI conversations with customers"""
     
     def __init__(self):
-        self.client = openai.OpenAI(api_key=settings.openai_api_key)
+        # Initialize OpenAI client only if API key is available
+        self.client = None
+        if settings.openai_api_key:
+            try:
+                self.client = openai.OpenAI(api_key=settings.openai_api_key)
+            except Exception:
+                pass  # Will fail gracefully on first API call
         self.faq_handler = FAQHandler()
         self.intent_recognizer = IntentRecognizer()
         self.flow_manager = ConversationFlowManager()
@@ -92,6 +98,13 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
         messages.append({"role": "user", "content": user_message})
         
         # Generate response
+        if not self.client:
+            return {
+                "response": "I'm sorry, the AI service is not configured. Please contact support.",
+                "intent": "error",
+                "next_state": conversation_state
+            }
+        
         try:
             response = self.client.chat.completions.create(
                 model=settings.openai_model,

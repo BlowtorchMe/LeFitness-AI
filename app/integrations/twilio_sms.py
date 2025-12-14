@@ -11,11 +11,29 @@ class TwilioSMS:
     """Handles SMS sending via Twilio"""
     
     def __init__(self):
-        self.client = Client(
-            settings.twilio_account_sid,
-            settings.twilio_auth_token
+        # Handle missing Twilio credentials gracefully
+        self.client = None
+        self.from_number = None
+        # Check if credentials are provided and not empty/placeholder values
+        account_sid = settings.twilio_account_sid
+        auth_token = settings.twilio_auth_token
+        
+        # Validate credentials exist and are not empty/None/placeholders
+        has_valid_creds = (
+            account_sid is not None and 
+            auth_token is not None and
+            str(account_sid).strip() != "" and 
+            str(auth_token).strip() != "" and
+            "your_twilio" not in str(account_sid).lower() and
+            "your_twilio" not in str(auth_token).lower()
         )
-        self.from_number = settings.twilio_phone_number
+        
+        if has_valid_creds:
+            try:
+                self.client = Client(str(account_sid), str(auth_token))
+                self.from_number = settings.twilio_phone_number
+            except Exception:
+                pass  # Will fail gracefully on first SMS send
     
     def send_sms(self, to: str, message: str) -> Dict[str, Any]:
         """
@@ -28,6 +46,11 @@ class TwilioSMS:
         Returns:
             Dict with status and message SID
         """
+        if not self.client:
+            return {
+                "success": False,
+                "error": "Twilio not configured"
+            }
         try:
             message_obj = self.client.messages.create(
                 body=message,

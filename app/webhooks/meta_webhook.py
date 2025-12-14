@@ -8,7 +8,6 @@ from typing import Optional, Dict
 from app.config import settings
 from app.integrations.meta_api import MetaAPI
 from app.integrations.messenger_api import MessengerAPI
-from app.config import settings
 
 # Use mock APIs in test mode
 if settings.use_mock_apis or settings.test_mode:
@@ -26,6 +25,9 @@ from app.models.conversation import ConversationChannel
 from datetime import datetime
 
 router = APIRouter()
+
+# Initialize chat_handler - handle errors gracefully for Vercel
+# ChatHandler now handles missing API keys gracefully
 chat_handler = ChatHandler()
 
 
