@@ -44,6 +44,9 @@ async def verify_webhook(
     challenge: str = Query(..., alias="hub.challenge")
 ):
     """Verify META webhook"""
+    # Debug logging (remove in production)
+    print(f"[WEBHOOK VERIFY] mode={mode}, token={token}, expected={settings.meta_verify_token}")
+    
     challenge_response = meta_api.verify_webhook(mode, token, challenge)
     
     if challenge_response:

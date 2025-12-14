@@ -15,9 +15,17 @@ class MockMetaAPI:
         self.verify_token = "mock_verify_token"
         self._mock_users = {}  # Store mock user data
     
-    def verify_webhook(self, mode: str, token: str, challenge: str) -> bool:
-        """Verify webhook (always returns True in mock mode)"""
-        return token == self.verify_token
+    def verify_webhook(self, mode: str, token: str, challenge: str):
+        """Verify webhook - returns challenge string if verified, None otherwise"""
+        # In mock mode, also check against settings.meta_verify_token if available
+        from app.config import settings
+        expected_token = settings.meta_verify_token or self.verify_token
+        
+        if mode == "subscribe" and token == expected_token:
+            print(f"[MOCK VERIFY] Verification successful with token: {token}")
+            return challenge
+        print(f"[MOCK VERIFY] Token mismatch: received '{token}', expected '{expected_token}'")
+        return None
     
     def send_messenger_message(self, recipient_id: str, message: str) -> Dict:
         """Mock sending a message - just logs it"""

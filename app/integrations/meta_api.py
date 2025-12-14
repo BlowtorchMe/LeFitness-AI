@@ -159,9 +159,21 @@ class MetaAPI:
         Returns:
             Challenge string if verified, None otherwise
         """
-        if mode == "subscribe" and token == settings.meta_verify_token:
-            return challenge
-        return None
+        # Check mode and token match
+        if mode != "subscribe":
+            print(f"[VERIFY] Invalid mode: {mode} (expected 'subscribe')")
+            return None
+        
+        if not settings.meta_verify_token:
+            print("[VERIFY] META_VERIFY_TOKEN not set in environment")
+            return None
+        
+        if token != settings.meta_verify_token:
+            print(f"[VERIFY] Token mismatch: received '{token}', expected '{settings.meta_verify_token}'")
+            return None
+        
+        print("[VERIFY] Verification successful")
+        return challenge
     
     def _make_request(self, method: str, url: str, payload: Dict = None) -> Dict[str, any]:
         """
