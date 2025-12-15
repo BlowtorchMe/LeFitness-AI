@@ -80,11 +80,28 @@ async def handle_webhook(request: Request):
             messaging_events = entry.get("messaging", [])
             
             for event in messaging_events:
+                # CRITICAL: Ignore echo events (bot's own messages) to prevent infinite loops
+                message = event.get("message", {})
+                if message.get("is_echo"):
+                    print("[WEBHOOK] Ignoring echo event (bot's own message)")
+                    continue
+                
+                # Ignore delivery/read events
+                if "delivery" in event or "read" in event:
+                    print("[WEBHOOK] Ignoring delivery/read event")
+                    continue
+                
+                # Process real user messages
                 await handle_messaging_event(event, ConversationChannel.MESSENGER)
             
             # Handle opt-in events (Click-to-Message ad clicks)
             optin_events = entry.get("messaging", [])
             for event in optin_events:
+                # Ignore echo events for opt-in too
+                message = event.get("message", {})
+                if message.get("is_echo"):
+                    continue
+                
                 if event.get("optin"):
                     await handle_optin_event(event, ConversationChannel.MESSENGER)
     
@@ -94,6 +111,17 @@ async def handle_webhook(request: Request):
             messaging_events = entry.get("messaging", [])
             
             for event in messaging_events:
+                # CRITICAL: Ignore echo events (bot's own messages) to prevent infinite loops
+                message = event.get("message", {})
+                if message.get("is_echo"):
+                    print("[WEBHOOK] Ignoring echo event (bot's own message)")
+                    continue
+                
+                # Ignore delivery/read events
+                if "delivery" in event or "read" in event:
+                    print("[WEBHOOK] Ignoring delivery/read event")
+                    continue
+                
                 await handle_messaging_event(event, ConversationChannel.MESSENGER)  # Same API
     
     return {"status": "ok"}
@@ -104,7 +132,22 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
     Handle individual messaging event
     Works for both Facebook Messenger and Instagram Direct Messages
     """
+    # CRITICAL: Double-check for echo events (extra safety layer)
+    message = event.get("message", {})
+    if message.get("is_echo"):
+        print("[MESSAGING EVENT] Ignoring echo event (bot's own message)")
+        return
+    
+    # Ignore delivery/read events
+    if "delivery" in event or "read" in event:
+        print("[MESSAGING EVENT] Ignoring delivery/read event")
+        return
+    
     sender_id = event.get("sender", {}).get("id")
+    
+    if not sender_id:
+        print("[MESSAGING EVENT] No sender_id found")
+        return
     
     # Handle postback (button clicks)
     if event.get("postback"):
@@ -113,10 +156,11 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
         return
     
     # Handle regular text messages
-    message = event.get("message", {})
     message_text = message.get("text", "")
     
-    if not sender_id:
+    # Ignore empty messages (attachments, quick replies without text, etc.)
+    if not message_text:
+        print("[MESSAGING EVENT] No message text found, ignoring")
         return
     
     # Get or create lead
