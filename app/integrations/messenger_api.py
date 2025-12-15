@@ -9,6 +9,7 @@ class MessengerAPI:
     """Handles Facebook Messenger interactions"""
     
     def __init__(self):
+        # Always use real MetaAPI
         self.meta_api = MetaAPI()
     
     def send_message(self, recipient_id: str, message: str) -> Dict[str, any]:
@@ -34,6 +35,14 @@ class MessengerAPI:
         Returns:
             Dict with send result
         """
+        if not self.meta_api.access_token:
+            error_msg = "META_ACCESS_TOKEN not set - cannot send messages"
+            print(f"[ERROR] {error_msg}")
+            return {
+                "success": False,
+                "error": error_msg
+            }
+        
         url = f"{self.meta_api.base_url}/me/messages"
         
         # Format quick replies
@@ -54,12 +63,17 @@ class MessengerAPI:
             "messaging_type": "RESPONSE"
         }
         
+        print(f"[SEND QUICK REPLIES] Sending to {recipient_id}: {message[:50]}...")
         response = self.meta_api._make_request("POST", url, payload)
         if response.get("success"):
+            message_id = response.get("data", {}).get("message_id")
+            print(f"[SEND QUICK REPLIES] Success! Message ID: {message_id}")
             return {
                 "success": True,
-                "message_id": response.get("data", {}).get("message_id")
+                "message_id": message_id
             }
+        else:
+            print(f"[SEND QUICK REPLIES] Failed! {response.get('error')}")
         return response
     
     def send_button_template(
@@ -81,6 +95,14 @@ class MessengerAPI:
         Returns:
             Dict with send result
         """
+        if not self.meta_api.access_token:
+            error_msg = "META_ACCESS_TOKEN not set - cannot send messages"
+            print(f"[ERROR] {error_msg}")
+            return {
+                "success": False,
+                "error": error_msg
+            }
+        
         url = f"{self.meta_api.base_url}/me/messages"
         
         # Format buttons (max 3)
@@ -115,12 +137,17 @@ class MessengerAPI:
             "messaging_type": "RESPONSE"
         }
         
+        print(f"[SEND BUTTON TEMPLATE] Sending to {recipient_id}: {text[:50]}...")
         response = self.meta_api._make_request("POST", url, payload)
         if response.get("success"):
+            message_id = response.get("data", {}).get("message_id")
+            print(f"[SEND BUTTON TEMPLATE] Success! Message ID: {message_id}")
             return {
                 "success": True,
-                "message_id": response.get("data", {}).get("message_id")
+                "message_id": message_id
             }
+        else:
+            print(f"[SEND BUTTON TEMPLATE] Failed! {response.get('error')}")
         return response
     
     def send_generic_template(
@@ -135,6 +162,14 @@ class MessengerAPI:
             recipient_id: Facebook user ID
             elements: List of template elements (max 10)
         """
+        if not self.meta_api.access_token:
+            error_msg = "META_ACCESS_TOKEN not set - cannot send messages"
+            print(f"[ERROR] {error_msg}")
+            return {
+                "success": False,
+                "error": error_msg
+            }
+        
         url = f"{self.meta_api.base_url}/me/messages"
         
         payload = {
@@ -151,11 +186,16 @@ class MessengerAPI:
             "messaging_type": "RESPONSE"
         }
         
+        print(f"[SEND GENERIC TEMPLATE] Sending to {recipient_id}")
         response = self.meta_api._make_request("POST", url, payload)
         if response.get("success"):
+            message_id = response.get("data", {}).get("message_id")
+            print(f"[SEND GENERIC TEMPLATE] Success! Message ID: {message_id}")
             return {
                 "success": True,
-                "message_id": response.get("data", {}).get("message_id")
+                "message_id": message_id
             }
+        else:
+            print(f"[SEND GENERIC TEMPLATE] Failed! {response.get('error')}")
         return response
 

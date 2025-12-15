@@ -69,6 +69,14 @@ class MetaAPI:
         Returns:
             Dict with send result
         """
+        if not self.access_token:
+            error_msg = "META_ACCESS_TOKEN not set - cannot send messages"
+            print(f"[ERROR] {error_msg}")
+            return {
+                "success": False,
+                "error": error_msg
+            }
+        
         url = f"{self.base_url}/me/messages"
         
         payload = {
@@ -78,27 +86,38 @@ class MetaAPI:
         }
         
         try:
+            print(f"[SEND MESSAGE] Sending to {recipient_id}: {message[:50]}...")
             response = requests.post(
                 url,
                 params={"access_token": self.access_token},
                 json=payload
             )
             
+            print(f"[SEND MESSAGE] Response status: {response.status_code}")
+            
             if response.status_code == 200:
+                result = response.json()
+                message_id = result.get("message_id")
+                print(f"[SEND MESSAGE] Success! Message ID: {message_id}")
                 return {
                     "success": True,
-                    "message_id": response.json().get("message_id")
+                    "message_id": message_id
                 }
             else:
+                error_text = response.text
+                print(f"[SEND MESSAGE] Failed! Status {response.status_code}: {error_text}")
                 return {
                     "success": False,
-                    "error": response.text
+                    "error": error_text,
+                    "status_code": response.status_code
                 }
         
         except Exception as e:
+            error_msg = str(e)
+            print(f"[SEND MESSAGE] Exception: {error_msg}")
             return {
                 "success": False,
-                "error": str(e)
+                "error": error_msg
             }
     
     def get_user_profile(self, user_id: str, platform: str = "facebook") -> Dict[str, any]:
@@ -187,6 +206,14 @@ class MetaAPI:
         Returns:
             Dict with response data
         """
+        if not self.access_token:
+            error_msg = "META_ACCESS_TOKEN not set - cannot make API requests"
+            print(f"[ERROR] {error_msg}")
+            return {
+                "success": False,
+                "error": error_msg
+            }
+        
         try:
             params = {"access_token": self.access_token}
             
@@ -208,9 +235,11 @@ class MetaAPI:
                     "data": response.json()
                 }
             else:
+                error_text = response.text
+                print(f"[API REQUEST] Failed! Status {response.status_code}: {error_text}")
                 return {
                     "success": False,
-                    "error": response.text,
+                    "error": error_text,
                     "status_code": response.status_code
                 }
         
