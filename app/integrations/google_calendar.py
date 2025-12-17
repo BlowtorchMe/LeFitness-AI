@@ -23,7 +23,7 @@ class GoogleCalendar:
         self.calendar_id = settings.google_calendar_id
         self.service = None
         # Only authenticate if credentials are provided
-        if settings.google_calendar_id and (settings.google_client_config or settings.google_service_account):
+        if settings.google_calendar_id and (getattr(settings, 'google_client_config', None) or settings.google_service_account):
             self._authenticate()
     
     def _authenticate(self):
@@ -64,7 +64,7 @@ class GoogleCalendar:
                                 )
                             else:
                                 raise Exception(f"Google service account not found: {service_account_data}")
-                    elif settings.google_client_config:
+                    elif getattr(settings, 'google_client_config', None):
                         # OAuth flow (for first-time setup)
                         try:
                             client_config = json.loads(settings.google_client_config) if isinstance(settings.google_client_config, str) else settings.google_client_config

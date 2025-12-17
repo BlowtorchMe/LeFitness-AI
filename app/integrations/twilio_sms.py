@@ -2,9 +2,16 @@
 Twilio SMS integration
 """
 from typing import Dict, Any, Optional
-from twilio.rest import Client
-from twilio.base.exceptions import TwilioRestException
 from app.config import settings
+
+try:
+    from twilio.rest import Client
+    from twilio.base.exceptions import TwilioRestException
+    TWILIO_AVAILABLE = True
+except ImportError:
+    TWILIO_AVAILABLE = False
+    Client = None
+    TwilioRestException = Exception
 
 
 class TwilioSMS:
@@ -15,8 +22,8 @@ class TwilioSMS:
         self.client = None
         self.from_number = None
         # Check if credentials are provided and not empty/placeholder values
-        account_sid = settings.twilio_account_sid
-        auth_token = settings.twilio_auth_token
+        account_sid = getattr(settings, 'twilio_account_sid', None)
+        auth_token = getattr(settings, 'twilio_auth_token', None)
         
         # Validate credentials exist and are not empty/None/placeholders
         has_valid_creds = (
@@ -28,10 +35,10 @@ class TwilioSMS:
             "your_twilio" not in str(auth_token).lower()
         )
         
-        if has_valid_creds:
+        if has_valid_creds and TWILIO_AVAILABLE:
             try:
                 self.client = Client(str(account_sid), str(auth_token))
-                self.from_number = settings.twilio_phone_number
+                self.from_number = getattr(settings, 'twilio_phone_number', None)
             except Exception:
                 pass  # Will fail gracefully on first SMS send
     

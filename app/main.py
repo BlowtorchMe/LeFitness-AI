@@ -4,7 +4,7 @@ Main FastAPI application entry point
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.webhooks import meta_webhook, sms_webhook, calendar_webhook
+from app.webhooks import meta_webhook, calendar_webhook
 from app.api import leads, bookings
 from app.services.calendar_webhook_service import calendar_webhook_service
 from contextlib import asynccontextmanager
@@ -75,7 +75,6 @@ app.add_middleware(
 
 # Include routers
 app.include_router(meta_webhook.router, prefix="/webhooks/meta", tags=["webhooks"])
-app.include_router(sms_webhook.router, prefix="/webhooks/sms", tags=["webhooks"])
 app.include_router(calendar_webhook.router, prefix="/webhooks/calendar", tags=["webhooks"])
 app.include_router(leads.router, prefix="/api/leads", tags=["leads"])
 app.include_router(bookings.router, prefix="/api/bookings", tags=["bookings"])
