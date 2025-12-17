@@ -68,24 +68,18 @@ class ConversationFlow:
         return {"message": None, "next_state": current_state}
     
     async def _recommend_booking(self, lead, sender_id: str, lead_service: LeadService) -> Dict:
-        """Proactively recommend booking after profile complete"""
+        """Proactively recommend booking after profile complete - provide appointment schedule link"""
         from app.config import settings
         
-        message = f"Perfect, {lead.name}! 🎉 Now let's get you booked for your free {settings.free_trial_days}-day trial at {settings.gym_name}!\n\nYou'll get:\n✅ Full gym access\n✅ All equipment\n✅ Group training classes\n✅ Personal gym tour\n\nWhen would you like to visit us?"
+        calendar_link = self._get_calendar_link(datetime.now())
         
-        self.messenger_api.send_quick_replies(
-            recipient_id=sender_id,
-            message=message,
-            quick_replies=[
-                {"title": "Tomorrow", "payload": "BOOK_TOMORROW"},
-                {"title": "This Week", "payload": "BOOK_THIS_WEEK"},
-                {"title": "Next Week", "payload": "BOOK_NEXT_WEEK"},
-                {"title": "Choose Date", "payload": "BOOK_CHOOSE_DATE"}
-            ]
-        )
+        message = f"Perfect, {lead.name}! Now let's get you booked for your free {settings.free_trial_days}-day trial at {settings.gym_name}!\n\nYou'll get:\n✅ Full gym access\n✅ All equipment\n✅ Group training classes\n✅ Personal gym tour\n\nPlease book your appointment at a time that works best for you using this link:\n{calendar_link}\n\nOnce you've booked, I'll confirm everything for you!"
+        
+        self.messenger_api.send_message(recipient_id=sender_id, message=message)
         
         # Update state
         lead.conversation_state = ConversationState.RECOMMENDING_BOOKING.value
+        lead.notes = "waiting_for_calendar_booking"
         lead_service.db.commit()
         
         return {
@@ -95,18 +89,12 @@ class ConversationFlow:
         }
     
     async def _continue_recommending(self, lead, sender_id: str) -> Dict:
-        """Continue recommending booking"""
-        message = "Our free trial is a great way to experience everything we offer! Would you like to book your appointment now?"
+        """Continue recommending booking - provide appointment schedule link again"""
+        calendar_link = self._get_calendar_link(datetime.now())
         
-        self.messenger_api.send_quick_replies(
-            recipient_id=sender_id,
-            message=message,
-            quick_replies=[
-                {"title": "Yes, Book Now", "payload": "BOOK_NOW"},
-                {"title": "Tell Me More", "payload": "LEARN_MORE"},
-                {"title": "Maybe Later", "payload": "LATER"}
-            ]
-        )
+        message = f"Our free trial is a great way to experience everything we offer! Please use this link to book your appointment at a time that works best for you:\n{calendar_link}"
+        
+        self.messenger_api.send_message(recipient_id=sender_id, message=message)
         
         return {
             "message": message,
@@ -115,64 +103,22 @@ class ConversationFlow:
     
     async def _collect_booking_details(self, lead, sender_id: str, booking_service: BookingService) -> Dict:
         """
-        Collect booking date and time
-        Primary: Show available time slots as buttons
-        Fallback: Offer calendar link for more flexibility
+        Provide appointment schedule link for booking
+        User books directly via Google Calendar Appointment Schedule
         """
-        # Get available slots for tomorrow
-        tomorrow = datetime.now() + timedelta(days=1)
-        slots = booking_service.get_available_slots(tomorrow)
+        calendar_link = self._get_calendar_link(datetime.now())
         
-        if slots:
-            # Show available time slots as buttons (PRIMARY METHOD)
-            time_buttons = []
-            for slot in slots[:3]:  # Show first 3 slots
-                time_str = datetime.fromisoformat(slot["start"]).strftime("%H:%M")
-                time_buttons.append({
-                    "type": "postback",
-                    "title": time_str,
-                    "payload": f"BOOK_TIME_{slot['start']}"
-                })
-            
-            # Add "See More" and "View Calendar" options
-            if len(slots) > 3:
-                time_buttons.append({
-                    "type": "postback",
-                    "title": "See More Times",
-                    "payload": "BOOK_MORE_TIMES"
-                })
-            
-            # Add calendar link as fallback option
-            time_buttons.append({
-                "type": "web_url",
-                "title": "View Full Calendar",
-                "url": self._get_calendar_link(tomorrow)
-            })
-            
-            self.messenger_api.send_button_template(
-                recipient_id=sender_id,
-                text="Great! Here are some available times for tomorrow. You can select one, or view the full calendar:",
-                buttons=time_buttons
-            )
-            
-            # If user chooses calendar link, set flag to follow up
-            # (This will be handled in postback handler)
-        else:
-            # No slots available, ask for preferred time or offer calendar
-            self.messenger_api.send_button_template(
-                recipient_id=sender_id,
-                text="What time works best for you?",
-                buttons=[
-                    {"type": "postback", "title": "Morning (9-12)", "payload": "BOOK_MORNING"},
-                    {"type": "postback", "title": "Afternoon (12-17)", "payload": "BOOK_AFTERNOON"},
-                    {"type": "postback", "title": "Evening (17-20)", "payload": "BOOK_EVENING"},
-                    {"type": "web_url", "title": "View Calendar", "url": self._get_calendar_link(tomorrow)}
-                ]
-            )
+        message = f"Great! Please use this link to book your appointment at a time that works best for you:\n{calendar_link}\n\nOnce you've booked, I'll confirm everything for you!"
+        
+        self.messenger_api.send_message(recipient_id=sender_id, message=message)
+        
+        # Set flag to wait for calendar booking
+        lead.notes = "waiting_for_calendar_booking"
+        booking_service.db.commit()
         
         return {
-            "message": "Collecting booking details",
-            "next_state": ConversationState.COLLECTING_BOOKING_DETAILS.value
+            "message": message,
+            "next_state": ConversationState.RECOMMENDING_BOOKING.value
         }
     
     def _get_calendar_link(self, date: datetime) -> str:

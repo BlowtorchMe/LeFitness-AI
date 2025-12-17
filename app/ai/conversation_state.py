@@ -47,9 +47,9 @@ class ConversationFlowManager:
             
             ConversationState.PROFILE_COMPLETE: f"""Great! You have the customer's profile information. Now proactively recommend booking their free {settings.free_trial_days}-day trial period. Be enthusiastic and highlight the benefits. Guide them toward booking.""",
             
-            ConversationState.RECOMMENDING_BOOKING: f"""You are recommending the free trial. Be persuasive but not pushy. Highlight benefits like: full gym access, equipment, group training, gym tour. Guide them to book an appointment.""",
+            ConversationState.RECOMMENDING_BOOKING: f"""You are recommending the free trial. Be persuasive but not pushy. Highlight benefits like: full gym access, equipment, group training, gym tour. The user has been provided with an appointment schedule link - remind them to use that link to book. DO NOT suggest specific time slots.""",
             
-            ConversationState.COLLECTING_BOOKING_DETAILS: """You are collecting booking details (date and time). Ask when they'd like to visit. Offer specific time slots if available. Be flexible and accommodating.""",
+            ConversationState.COLLECTING_BOOKING_DETAILS: """The user has been provided with an appointment schedule link. DO NOT suggest specific time slots. Instead, remind them to use the appointment schedule link that was already sent to book at a time that works for them. Once they book via the calendar, the system will automatically detect it.""",
             
             ConversationState.CONFIRMING_BOOKING: """You are confirming the booking details with the customer. Repeat back the date and time they chose. Ask for final confirmation before creating the booking.""",
             

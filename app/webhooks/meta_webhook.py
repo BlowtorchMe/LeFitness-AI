@@ -308,14 +308,12 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
                 lead_service.db.commit()
                 return
     
-    # Check if user is confirming calendar booking
+    # Check if user is waiting for calendar booking
     if lead.notes == "waiting_for_calendar_booking":
-        # User might be confirming they booked via calendar
+        # If user confirms they booked, acknowledge it
         if any(word in message_text.lower() for word in ["booked", "done", "yes", "confirmed", "scheduled"]):
             calendar_msg = "Great! I'll check the calendar and confirm your booking. You should receive a confirmation email shortly!"
             messenger_api.send_message(recipient_id=sender_id, message=calendar_msg)
-            # Save outbound message
-            conversation_service = ConversationService(lead_service.db)
             conversation_service.save_message(
                 lead_id=lead.id,
                 channel=channel,
@@ -323,9 +321,30 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
                 message_text=calendar_msg,
                 messenger_id=sender_id
             )
-            # Try to match calendar event (simplified - would need proper implementation)
-            # For now, just clear the flag and let staff verify
             lead.notes = "calendar_booking_pending_verification"
+            lead_service.db.commit()
+            return
+        
+        # If user asks about booking or calendar, provide the link again
+        booking_keywords = ["book", "booking", "calendar", "appointment", "schedule", "time", "plz", "please", "link"]
+        if any(keyword in message_text.lower() for keyword in booking_keywords):
+            from app.ai.conversation_flow import ConversationFlow
+            from datetime import datetime
+            
+            flow = ConversationFlow()
+            calendar_link = flow._get_calendar_link(datetime.now())
+            
+            calendar_msg = f"Please use this link to book your appointment:\n{calendar_link}\n\nOnce you've booked, I'll confirm everything for you!"
+            
+            messenger_api.send_message(recipient_id=sender_id, message=calendar_msg)
+            
+            conversation_service.save_message(
+                lead_id=lead.id,
+                channel=channel,
+                direction=MessageDirection.OUTBOUND,
+                message_text=calendar_msg,
+                messenger_id=sender_id
+            )
             lead_service.db.commit()
             return
     
@@ -404,105 +423,39 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
             recent_conv.intent = intent
             conversation_service.db.commit()
     
-    # Check if user is asking for calendar link or available times
-    calendar_keywords = ["calendar", "full calendar", "available", "time slot", "time slots", "schedule", "appointment", "book time", "see calendar", "view calendar"]
+    # Check if user is asking for calendar link
+    calendar_keywords = ["calendar", "full calendar", "available", "time slot", "time slots", "schedule", "appointment", "book time", "see calendar", "view calendar", "book", "booking"]
     is_calendar_request = any(keyword in message_text.lower() for keyword in calendar_keywords)
     
-    # If user asks for calendar/available times, use actual Google Calendar integration
+    # If user asks for calendar/booking, provide appointment schedule link
     if is_calendar_request and current_state in ["profile_complete", "recommending_booking", "collecting_booking_details"]:
-        from datetime import datetime, timedelta
+        from datetime import datetime
         from app.ai.conversation_flow import ConversationFlow
         
         flow = ConversationFlow()
-        booking_service = BookingService(lead_service.db)
-        tomorrow = datetime.now() + timedelta(days=1)
         
-        # Check if user specifically wants just the calendar link (not available times)
-        calendar_only_keywords = ["full calendar", "see calendar", "view calendar", "calendar link"]
-        is_calendar_only = any(keyword in message_text.lower() for keyword in calendar_only_keywords)
+        # Provide appointment schedule link directly
+        calendar_link = flow._get_calendar_link(datetime.now())
         
-        if is_calendar_only:
-            # User just wants the calendar link - show it directly
-            calendar_link = flow._get_calendar_link(tomorrow)
-            calendar_msg = f"Here's the link to view our full calendar with all available time slots:\n\n{calendar_link}\n\nYou can browse all available times and book directly from the calendar!"
-            
-            messenger_api.send_button_template(
-                recipient_id=sender_id,
-                text=calendar_msg,
-                buttons=[{
-                    "type": "web_url",
-                    "title": "Open Calendar",
-                    "url": calendar_link
-                }]
-            )
-            
-            # Save outbound message
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=channel,
-                direction=MessageDirection.OUTBOUND,
-                message_text=calendar_msg,
-                messenger_id=sender_id,
-                ai_response=calendar_msg,
-                intent="book"
-            )
-            
-            # Update state
-            lead.conversation_state = "collecting_booking_details"
-            lead_service.db.commit()
-            return
+        calendar_msg = f"Perfect! Please use this link to book your appointment at a time that works best for you:\n{calendar_link}\n\nOnce you've booked, I'll confirm everything for you!"
         
-        # Get available slots from Google Calendar
-        slots = booking_service.get_available_slots(tomorrow)
+        messenger_api.send_message(recipient_id=sender_id, message=calendar_msg)
         
-        if slots:
-            # Show available time slots as buttons
-            time_buttons = []
-            for slot in slots[:3]:  # Show first 3 slots
-                time_str = datetime.fromisoformat(slot["start"]).strftime("%H:%M")
-                time_buttons.append({
-                    "type": "postback",
-                    "title": time_str,
-                    "payload": f"BOOK_TIME_{slot['start']}"
-                })
-            
-            # Add "See More" if there are more slots
-            if len(slots) > 3:
-                time_buttons.append({
-                    "type": "postback",
-                    "title": "See More Times",
-                    "payload": "BOOK_MORE_TIMES"
-                })
-            
-            # Add calendar link as option
-            time_buttons.append({
-                "type": "web_url",
-                "title": "View Full Calendar",
-                "url": flow._get_calendar_link(tomorrow)
-            })
-            
-            calendar_msg = "Here are available time slots for tomorrow. You can select one or view the full calendar:"
-            messenger_api.send_button_template(
-                recipient_id=sender_id,
-                text=calendar_msg,
-                buttons=time_buttons
-            )
-            
-            # Save outbound message
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=channel,
-                direction=MessageDirection.OUTBOUND,
-                message_text=calendar_msg,
-                messenger_id=sender_id,
-                ai_response=calendar_msg,
-                intent="book"
-            )
-            
-            # Update state
-            lead.conversation_state = "collecting_booking_details"
-            lead_service.db.commit()
-            return
+        # Save outbound message
+        conversation_service.save_message(
+            lead_id=lead.id,
+            channel=channel,
+            direction=MessageDirection.OUTBOUND,
+            message_text=calendar_msg,
+            messenger_id=sender_id,
+            ai_response=calendar_msg,
+            intent="book"
+        )
+        
+        lead.notes = "waiting_for_calendar_booking"
+        lead.conversation_state = "recommending_booking"
+        lead_service.db.commit()
+        return
     
     # Send response with appropriate structure
     if intent == "book" and current_state in ["profile_complete", "recommending_booking"]:

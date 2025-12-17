@@ -161,12 +161,17 @@ async def process_calendar_changes():
             if lead:
                 lead.status = LeadStatus.BOOKED
                 lead.notes = f"calendar_booking_saved:{event_id}"
-                # Notify user via Messenger/Instagram
+                # Notify user via Messenger/Instagram with confirmation and thanks
                 if lead.messenger_id:
+                    confirmation_message = (
+                        f"Perfect! I've confirmed your booking for {event_dt.strftime('%B %d at %I:%M %p')}.\n\n"
+                        f"You should receive a confirmation email shortly with all the details.\n\n"
+                        f"Thank you for choosing {settings.gym_name}! We're excited to welcome you and help you start your fitness journey.\n\n"
+                        f"If you have any questions before your visit, just let me know. Looking forward to seeing you!"
+                    )
                     messenger_api.send_message(
                         recipient_id=lead.messenger_id,
-                        message=f"Perfect! I've confirmed your booking for {event_dt.strftime('%B %d at %I:%M %p')}. "
-                               f"You should receive a confirmation email shortly. Looking forward to seeing you!"
+                        message=confirmation_message
                     )
         
         db.commit()
