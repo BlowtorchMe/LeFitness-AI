@@ -6,6 +6,8 @@ from app.ai.conversation_state import ConversationState, ConversationFlowManager
 from app.integrations.messenger_api import MessengerAPI
 from app.services.booking_service import BookingService
 from app.services.lead_service import LeadService
+from app.services.conversation_service import ConversationService
+from app.models.conversation import ConversationChannel, MessageDirection
 from datetime import datetime, timedelta
 from app.config import settings
 from app.integrations.google_calendar import GoogleCalendar
@@ -175,21 +177,29 @@ class ConversationFlow:
     
     def _get_calendar_link(self, date: datetime) -> str:
         """
-        Generate Google Calendar link for viewing/booking
-        This opens Google Calendar in a new window
+        Get Google Calendar Appointment Schedule booking page link
+        This is the booking page where users can see available slots and book directly
         """
         from app.config import settings
         
-        # Create Google Calendar URL with date pre-selected
-        # Format: https://calendar.google.com/calendar/render?action=TEMPLATE&dates=...
-        start_time = date.replace(hour=9, minute=0)  # Default to 9 AM
-        end_time = start_time + timedelta(hours=1)
+        # If Appointment Schedule link is configured, use it (best option)
+        if settings.google_appointment_schedule_link:
+            return settings.google_appointment_schedule_link
         
-        # Format dates for Google Calendar (YYYYMMDDTHHMMSSZ)
+        # Fallback: If we have a calendar ID, try to create a link to view the calendar
+        if settings.google_calendar_id:
+            import urllib.parse
+            calendar_id_encoded = urllib.parse.quote(settings.google_calendar_id, safe='')
+            # Link to view the calendar (shows all events)
+            return f"https://calendar.google.com/calendar/u/0/r?cid={calendar_id_encoded}"
+        
+        # Last resort: create event link
+        start_time = date.replace(hour=9, minute=0)
+        end_time = start_time + timedelta(hours=1)
         start_str = start_time.strftime("%Y%m%dT%H%M%S")
         end_str = end_time.strftime("%Y%m%dT%H%M%S")
         
-        calendar_url = (
+        return (
             f"https://calendar.google.com/calendar/render?"
             f"action=TEMPLATE"
             f"&text=Free Trial - {settings.gym_name}"
@@ -197,8 +207,6 @@ class ConversationFlow:
             f"&details=Book your free trial appointment"
             f"&location={settings.gym_name}"
         )
-        
-        return calendar_url
     
     async def _confirm_booking_details(self, lead, user_message: str, sender_id: str, booking_service: BookingService) -> Dict:
         """Confirm booking details before creating"""

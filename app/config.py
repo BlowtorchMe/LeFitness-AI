@@ -17,30 +17,18 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4"
     
-    # Twilio SMS (Optional - only needed for SMS features)
-    twilio_account_sid: Optional[str] = None
-    twilio_auth_token: Optional[str] = None
-    twilio_phone_number: Optional[str] = None
-    
     # META/Facebook (Optional in test mode)
     meta_app_id: Optional[str] = None
     meta_app_secret: Optional[str] = None
     meta_access_token: Optional[str] = None
     meta_verify_token: Optional[str] = None
     
-    # Google Calendar (Optional - only needed for calendar features)
-    google_calendar_id: Optional[str] = None  # Calendar ID (usually your email)
-    google_client_config: Optional[str] = None  # JSON string for OAuth
-    google_service_account: Optional[str] = None  # Path to service account JSON
-    google_api_key: Optional[str] = None  # API key (for read-only access)
+    # Google Calendar (Optional - only needed for booking tracking)
+    google_calendar_id: Optional[str] = None
+    google_service_account: Optional[str] = None
+    google_appointment_schedule_link: Optional[str] = None
+    google_calendar_webhook_url: Optional[str] = None  # Public URL for calendar webhook (e.g., https://yourdomain.com/webhooks/calendar)
     timezone: str = "UTC"
-    
-    # Email (SMTP) (Optional - Google Calendar sends emails automatically)
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 587
-    smtp_user: Optional[str] = None  # SMTP username (usually your email)
-    smtp_password: Optional[str] = None  # SMTP password or app password
-    from_email: Optional[str] = None  # From email (defaults to smtp_user)
     
     # Database
     database_url: str = "postgresql://user:password@localhost:5432/lefitness"

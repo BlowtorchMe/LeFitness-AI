@@ -52,6 +52,10 @@ class LeadService:
         """Get lead by Messenger/Instagram ID"""
         return self.db.query(Lead).filter(Lead.messenger_id == messenger_id).first()
     
+    def get_lead_by_email(self, email: str) -> Optional[Lead]:
+        """Get lead by email address"""
+        return self.db.query(Lead).filter(Lead.email == email).first()
+    
     def get_lead(self, lead_id: int) -> Optional[Lead]:
         """Get lead by ID"""
         return self.db.query(Lead).filter(Lead.id == lead_id).first()

@@ -56,17 +56,18 @@ async def handle_calendar_webhook(request: Request):
 
 async def process_calendar_changes():
     """
-    Process calendar changes - find new events and match to leads
+    Process calendar changes - find new events and save all bookings to database
     """
     from app.database.database import SessionLocal
     from app.models.lead import Lead
+    from app.models.booking import Booking, AppointmentType, BookingStatus
     from app.config import settings
     
     global calendar
     
     # Only process if calendar is configured
     if not calendar:
-        if settings.google_calendar_id or settings.google_client_config or settings.google_service_account:
+        if settings.google_calendar_id and settings.google_service_account:
             # Try to initialize calendar
             try:
                 calendar = GoogleCalendar()
@@ -84,18 +85,97 @@ async def process_calendar_changes():
         start_time = datetime.utcnow() - timedelta(hours=2)
         events = calendar.get_recent_events(start_time=start_time) if calendar.service else []
         
-        # Get leads waiting for calendar booking
-        waiting_leads = db.query(Lead).filter(
-            Lead.notes == "waiting_for_calendar_booking"
-        ).all()
+        # Process all new events - save to database
+        for event in events:
+            event_id = event.get("id")
+            if not event_id:
+                continue
+            
+            # Check if booking already exists for this event
+            existing_booking = db.query(Booking).filter(
+                Booking.external_booking_id == event_id
+            ).first()
+            
+            if existing_booking:
+                # Already saved, skip
+                continue
+            
+            # Parse event details
+            event_start = event.get("start", {}).get("dateTime")
+            if not event_start:
+                continue
+            
+            try:
+                event_dt = datetime.fromisoformat(event_start.replace("Z", "+00:00"))
+            except:
+                continue
+            
+            # Get attendee information
+            attendees = event.get("attendees", [])
+            attendee_email = attendees[0].get("email") if attendees else None
+            attendee_name = attendees[0].get("displayName") if attendees else None
+            
+            # Extract customer name from event summary or attendee
+            event_summary = event.get("summary", "")
+            customer_name = attendee_name or event_summary.split("-")[-1].strip() if "-" in event_summary else event_summary or "Customer"
+            
+            # Try to find matching lead by email or name
+            lead = None
+            if attendee_email:
+                lead = lead_service.get_lead_by_email(attendee_email)
+            
+            if not lead and customer_name and customer_name != "Customer":
+                # Try to find by name
+                leads = db.query(Lead).filter(Lead.name.ilike(f"%{customer_name.split()[0]}%")).all()
+                if leads:
+                    lead = leads[0]  # Take first match
+            
+            # Calculate duration from event
+            event_end = event.get("end", {}).get("dateTime")
+            duration_minutes = 60  # Default
+            if event_end:
+                try:
+                    end_dt = datetime.fromisoformat(event_end.replace("Z", "+00:00"))
+                    duration_minutes = int((end_dt - event_dt).total_seconds() / 60)
+                except:
+                    pass
+            
+            # Create booking in database
+            from app.models.booking import AppointmentType
+            booking = Booking(
+                lead_id=lead.id if lead else None,
+                customer_name=customer_name,
+                phone=lead.phone if lead else None,
+                email=attendee_email,
+                appointment_time=event_dt,
+                appointment_type=AppointmentType.TRIAL_ACTIVATION,
+                duration_minutes=duration_minutes,
+                status=BookingStatus.CONFIRMED,
+                external_booking_id=event_id,
+                calendar_link=event.get("htmlLink")
+            )
+            
+            db.add(booking)
+            
+            # Update lead if matched
+            if lead:
+                lead.status = LeadStatus.BOOKED
+                lead.notes = f"calendar_booking_saved:{event_id}"
+                # Notify user via Messenger/Instagram
+                if lead.messenger_id:
+                    messenger_api.send_message(
+                        recipient_id=lead.messenger_id,
+                        message=f"Perfect! I've confirmed your booking for {event_dt.strftime('%B %d at %I:%M %p')}. "
+                               f"You should receive a confirmation email shortly. Looking forward to seeing you!"
+                    )
         
-        # Try to match events to leads
-        for lead in waiting_leads:
-            for event in events:
-                if _match_event_to_lead(event, lead):
-                    # Found a match!
-                    await _process_matched_booking(lead, event, lead_service, booking_service)
-                    break
+        db.commit()
+        
+    except Exception as e:
+        print(f"Error processing calendar changes: {e}")
+        import traceback
+        traceback.print_exc()
+        db.rollback()
     finally:
         db.close()
 

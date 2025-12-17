@@ -26,9 +26,11 @@ else:
     messenger_api = MessengerAPI()
 from app.services.lead_service import LeadService
 from app.services.booking_service import BookingService
+from app.services.conversation_service import ConversationService
 from app.ai.chat_handler import ChatHandler
 from app.database.database import get_db
-from app.models.conversation import ConversationChannel
+from app.models.conversation import ConversationChannel, MessageDirection, Conversation
+from sqlalchemy import desc
 from datetime import datetime
 
 router = APIRouter()
@@ -166,6 +168,7 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
     # Get or create lead
     db = next(get_db())
     lead_service = LeadService(db)
+    conversation_service = ConversationService(db)
     
     # Find lead by messenger_id
     lead = lead_service.get_lead_by_messenger_id(sender_id)
@@ -184,25 +187,22 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
             source="meta_ad" if event.get("referral") else platform_name
         )
         
-        # Send welcome message ONLY - wait for user response
+        # For new leads from first message: send welcome and start profile gathering
+        # User sent first message, so send welcome and start profile gathering
         welcome_msg = chat_handler.get_welcome_message(lead.name if lead.name != "Customer" else None)
         messenger_api.send_message(recipient_id=sender_id, message=welcome_msg)
         
-        # Set state to wait for user response before asking profile questions
-        lead.conversation_state = "welcome_sent"
-        lead.notes = "waiting_for_first_response"
-        lead_service.db.commit()
+        # Save welcome message to database
+        conversation_service.save_message(
+            lead_id=lead.id,
+            channel=channel,
+            direction=MessageDirection.OUTBOUND,
+            message_text=welcome_msg,
+            messenger_id=sender_id
+        )
         
-        # Don't process the message yet - wait for user to respond
-        return
-    
-    # Check if we just sent welcome - now start profile gathering
-    if lead.notes == "waiting_for_first_response":
-        # User responded after welcome - ALWAYS start profile gathering
-        # Force asking for profile info even if some exists
+        # Start profile gathering immediately after welcome
         lead.notes = None
-        
-        # Check what we need - always ask unless explicitly provided by user
         needs_info = []
         if not lead.name or lead.name == "Customer":
             needs_info.append("name")
@@ -211,45 +211,72 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
         if not lead.phone:
             needs_info.append("phone")
         
-        # If we need any info, start gathering
+        # If we need any info, start gathering using gather_profile_info (pass existing services)
         if needs_info:
-            if "name" in needs_info:
-                messenger_api.send_quick_replies(
-                    recipient_id=sender_id,
-                    message="Great! To get started, could you please share your name?",
-                    quick_replies=[
-                        {"title": "Yes, my name is...", "payload": "SHARE_NAME"},
-                        {"title": "Skip for now", "payload": "SKIP_NAME"}
-                    ]
-                )
-                lead.notes = "profile_status:waiting_for_name"
+            status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
+            if status != "complete":
+                lead.notes = f"profile_status:{status}"
                 lead.conversation_state = "gathering_profile"
-            elif "email" in needs_info:
-                messenger_api.send_quick_replies(
-                    recipient_id=sender_id,
-                    message="Perfect! What's your email address? We'll send you a booking confirmation.",
-                    quick_replies=[
-                        {"title": "Share Email", "payload": "SHARE_EMAIL"},
-                        {"title": "Skip", "payload": "SKIP_EMAIL"}
-                    ]
-                )
-                lead.notes = "profile_status:waiting_for_email"
-                lead.conversation_state = "gathering_profile"
-            elif "phone" in needs_info:
-                messenger_api.send_quick_replies(
-                    recipient_id=sender_id,
-                    message="And finally, what's your phone number? We'll send you reminders.",
-                    quick_replies=[
-                        {"title": "Share Phone", "payload": "SHARE_PHONE"},
-                        {"title": "Skip", "payload": "SKIP_PHONE"}
-                    ]
-                )
-                lead.notes = "profile_status:waiting_for_phone"
-                lead.conversation_state = "gathering_profile"
+                lead_service.db.commit()
+                return
         else:
             # All info already collected - move to booking
             lead.conversation_state = "profile_complete"
             lead.notes = None
+        
+        lead_service.db.commit()
+        return
+    
+    # Check if this is first message from user (not from opt-in event)
+    # Send welcome and start profile gathering
+    if not lead.conversation_state or lead.conversation_state == "welcome":
+        # First message from user - send welcome and start profile gathering
+        welcome_msg = chat_handler.get_welcome_message(lead.name if lead.name != "Customer" else None)
+        messenger_api.send_message(recipient_id=sender_id, message=welcome_msg)
+        
+        # Save welcome message to database
+        conversation_service.save_message(
+            lead_id=lead.id,
+            channel=channel,
+            direction=MessageDirection.OUTBOUND,
+            message_text=welcome_msg,
+            messenger_id=sender_id
+        )
+        
+        # Start profile gathering using gather_profile_info (pass existing services)
+        lead.notes = None
+        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
+        if status != "complete":
+            lead.notes = f"profile_status:{status}"
+            lead.conversation_state = "gathering_profile"
+        else:
+            lead.conversation_state = "profile_complete"
+        
+        lead_service.db.commit()
+        return
+    
+    # Check if we just sent welcome - now start profile gathering
+    if lead.notes == "waiting_for_first_response":
+        # User responded after welcome - ALWAYS start profile gathering
+        lead.notes = None
+        
+        # Save inbound message first
+        conversation_service.save_message(
+            lead_id=lead.id,
+            channel=channel,
+            direction=MessageDirection.INBOUND,
+            message_text=message_text,
+            messenger_id=sender_id
+        )
+        lead_service.db.commit()
+        
+        # Start profile gathering using gather_profile_info (pass existing services)
+        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
+        if status != "complete":
+            lead.notes = f"profile_status:{status}"
+            lead.conversation_state = "gathering_profile"
+        else:
+            lead.conversation_state = "profile_complete"
         
         lead_service.db.commit()
         return
@@ -262,7 +289,7 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
     
     # Check if profile is complete before processing AI messages
     # If profile is not complete, start gathering
-    if not lead.conversation_state or lead.conversation_state == "welcome":
+    if not lead.conversation_state or lead.conversation_state == "welcome" or lead.conversation_state == "welcome_sent":
         # Check if we have all profile info
         needs_info = []
         if not lead.name or lead.name == "Customer":
@@ -285,9 +312,16 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
     if lead.notes == "waiting_for_calendar_booking":
         # User might be confirming they booked via calendar
         if any(word in message_text.lower() for word in ["booked", "done", "yes", "confirmed", "scheduled"]):
-            messenger_api.send_message(
-                recipient_id=sender_id,
-                message="Great! I'll check the calendar and confirm your booking. You should receive a confirmation email shortly!"
+            calendar_msg = "Great! I'll check the calendar and confirm your booking. You should receive a confirmation email shortly!"
+            messenger_api.send_message(recipient_id=sender_id, message=calendar_msg)
+            # Save outbound message
+            conversation_service = ConversationService(lead_service.db)
+            conversation_service.save_message(
+                lead_id=lead.id,
+                channel=channel,
+                direction=MessageDirection.OUTBOUND,
+                message_text=calendar_msg,
+                messenger_id=sender_id
             )
             # Try to match calendar event (simplified - would need proper implementation)
             # For now, just clear the flag and let staff verify
@@ -305,7 +339,12 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
         return
     
     # Process message with AI (state-aware)
-    conversation_history = []  # TODO: Load from database
+    # Load conversation history from database
+    conversation_service = ConversationService(lead_service.db)
+    conversation_history = conversation_service.get_conversation_history_for_ai(
+        lead_id=lead.id,
+        messenger_id=sender_id
+    )
     
     ai_response = await chat_handler.process_message(
         user_message=message_text,
@@ -353,6 +392,118 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
         lead.conversation_state = next_state
         lead_service.db.commit()
     
+    # Update inbound message with intent
+    if intent:
+        # Update the most recent inbound message with intent
+        recent_conv = conversation_service.db.query(Conversation).filter(
+            Conversation.lead_id == lead.id,
+            Conversation.direction == MessageDirection.INBOUND,
+            Conversation.messenger_id == sender_id
+        ).order_by(desc(Conversation.created_at)).first()
+        if recent_conv:
+            recent_conv.intent = intent
+            conversation_service.db.commit()
+    
+    # Check if user is asking for calendar link or available times
+    calendar_keywords = ["calendar", "full calendar", "available", "time slot", "time slots", "schedule", "appointment", "book time", "see calendar", "view calendar"]
+    is_calendar_request = any(keyword in message_text.lower() for keyword in calendar_keywords)
+    
+    # If user asks for calendar/available times, use actual Google Calendar integration
+    if is_calendar_request and current_state in ["profile_complete", "recommending_booking", "collecting_booking_details"]:
+        from datetime import datetime, timedelta
+        from app.ai.conversation_flow import ConversationFlow
+        
+        flow = ConversationFlow()
+        booking_service = BookingService(lead_service.db)
+        tomorrow = datetime.now() + timedelta(days=1)
+        
+        # Check if user specifically wants just the calendar link (not available times)
+        calendar_only_keywords = ["full calendar", "see calendar", "view calendar", "calendar link"]
+        is_calendar_only = any(keyword in message_text.lower() for keyword in calendar_only_keywords)
+        
+        if is_calendar_only:
+            # User just wants the calendar link - show it directly
+            calendar_link = flow._get_calendar_link(tomorrow)
+            calendar_msg = f"Here's the link to view our full calendar with all available time slots:\n\n{calendar_link}\n\nYou can browse all available times and book directly from the calendar!"
+            
+            messenger_api.send_button_template(
+                recipient_id=sender_id,
+                text=calendar_msg,
+                buttons=[{
+                    "type": "web_url",
+                    "title": "Open Calendar",
+                    "url": calendar_link
+                }]
+            )
+            
+            # Save outbound message
+            conversation_service.save_message(
+                lead_id=lead.id,
+                channel=channel,
+                direction=MessageDirection.OUTBOUND,
+                message_text=calendar_msg,
+                messenger_id=sender_id,
+                ai_response=calendar_msg,
+                intent="book"
+            )
+            
+            # Update state
+            lead.conversation_state = "collecting_booking_details"
+            lead_service.db.commit()
+            return
+        
+        # Get available slots from Google Calendar
+        slots = booking_service.get_available_slots(tomorrow)
+        
+        if slots:
+            # Show available time slots as buttons
+            time_buttons = []
+            for slot in slots[:3]:  # Show first 3 slots
+                time_str = datetime.fromisoformat(slot["start"]).strftime("%H:%M")
+                time_buttons.append({
+                    "type": "postback",
+                    "title": time_str,
+                    "payload": f"BOOK_TIME_{slot['start']}"
+                })
+            
+            # Add "See More" if there are more slots
+            if len(slots) > 3:
+                time_buttons.append({
+                    "type": "postback",
+                    "title": "See More Times",
+                    "payload": "BOOK_MORE_TIMES"
+                })
+            
+            # Add calendar link as option
+            time_buttons.append({
+                "type": "web_url",
+                "title": "View Full Calendar",
+                "url": flow._get_calendar_link(tomorrow)
+            })
+            
+            calendar_msg = "Here are available time slots for tomorrow. You can select one or view the full calendar:"
+            messenger_api.send_button_template(
+                recipient_id=sender_id,
+                text=calendar_msg,
+                buttons=time_buttons
+            )
+            
+            # Save outbound message
+            conversation_service.save_message(
+                lead_id=lead.id,
+                channel=channel,
+                direction=MessageDirection.OUTBOUND,
+                message_text=calendar_msg,
+                messenger_id=sender_id,
+                ai_response=calendar_msg,
+                intent="book"
+            )
+            
+            # Update state
+            lead.conversation_state = "collecting_booking_details"
+            lead_service.db.commit()
+            return
+    
     # Send response with appropriate structure
     if intent == "book" and current_state in ["profile_complete", "recommending_booking"]:
         # Show booking options
@@ -365,8 +516,28 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
                 {"title": "Next Week", "payload": "BOOK_NEXT_WEEK"}
             ]
         )
+        # Save outbound message
+        conversation_service.save_message(
+            lead_id=lead.id,
+            channel=channel,
+            direction=MessageDirection.OUTBOUND,
+            message_text=response_text,
+            messenger_id=sender_id,
+            ai_response=response_text,
+            intent=intent
+        )
     else:
         messenger_api.send_message(recipient_id=sender_id, message=response_text)
+        # Save outbound message
+        conversation_service.save_message(
+            lead_id=lead.id,
+            channel=channel,
+            direction=MessageDirection.OUTBOUND,
+            message_text=response_text,
+            messenger_id=sender_id,
+            ai_response=response_text,
+            intent=intent
+        )
     
     # Update lead
     lead_service.increment_message_count(lead.id)
@@ -403,13 +574,34 @@ async def handle_optin_event(event: Dict, channel: ConversationChannel):
             ad_campaign=ref
         )
     
-    # Send welcome message ONLY - wait for user response
+    # Send welcome message first
     welcome_msg = chat_handler.get_welcome_message(lead.name if lead.name != "Customer" else None)
     messenger_api.send_message(recipient_id=sender_id, message=welcome_msg)
     
-    # Set state to wait for user response before asking profile questions
-    lead.conversation_state = "welcome_sent"
-    lead.notes = "waiting_for_first_response"
+    # Save welcome message to database
+    conversation_service = ConversationService(lead_service.db)
+    conversation_service.save_message(
+        lead_id=lead.id,
+        channel=channel,
+        direction=MessageDirection.OUTBOUND,
+        message_text=welcome_msg,
+        messenger_id=sender_id
+    )
+    lead_service.db.commit()
+    
+    # Small delay to ensure messages appear separately in Facebook Messenger
+    import asyncio
+    await asyncio.sleep(0.5)
+    
+    # Then immediately start profile gathering (as a separate message)
+    lead.notes = None
+    status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
+    if status != "complete":
+        lead.notes = f"profile_status:{status}"
+        lead.conversation_state = "gathering_profile"
+    else:
+        lead.conversation_state = "profile_complete"
+    
     lead_service.db.commit()
 
 
@@ -422,15 +614,16 @@ async def handle_profile_gathering(
     channel: ConversationChannel
 ):
     """Handle profile information gathering"""
+    conversation_service = ConversationService(lead_service.db)
     
     if status == "waiting_for_name":
-        if message_text.lower() not in ["skip", "skip for now"]:
-            # Extract name from message
+        # Extract name from message
+        if message_text.strip():
             lead.name = message_text.strip()
             lead_service.db.commit()
         
-        # Move to next step
-        status = await gather_profile_info(sender_id, channel, lead)
+        # Move to next step (pass existing services)
+        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
         lead.notes = f"profile_status:{status}" if status != "complete" else None
         lead_service.db.commit()
         
@@ -448,14 +641,13 @@ async def handle_profile_gathering(
             await flow._recommend_booking(lead, sender_id, lead_service)
     
     elif status == "waiting_for_email":
-        if message_text.lower() not in ["skip"]:
-            # Extract email from message (simple validation)
-            if "@" in message_text:
-                lead.email = message_text.strip()
-                lead_service.db.commit()
+        # Extract email from message (simple validation)
+        if "@" in message_text:
+            lead.email = message_text.strip()
+            lead_service.db.commit()
         
-        # Move to next step
-        status = await gather_profile_info(sender_id, channel, lead)
+        # Move to next step (pass existing services)
+        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
         lead.notes = f"profile_status:{status}" if status != "complete" else None
         lead_service.db.commit()
         
@@ -473,13 +665,12 @@ async def handle_profile_gathering(
             await flow._recommend_booking(lead, sender_id, lead_service)
     
     elif status == "waiting_for_phone":
-        if message_text.lower() not in ["skip"]:
-            # Extract phone from message
-            # Remove common separators
-            phone = message_text.strip().replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
-            if phone.isdigit() or phone.startswith("+"):
-                lead.phone = phone
-                lead_service.db.commit()
+        # Extract phone from message
+        # Remove common separators
+        phone = message_text.strip().replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+        if phone and (phone.isdigit() or phone.startswith("+")):
+            lead.phone = phone
+            lead_service.db.commit()
         
         # Profile gathering complete - transition to recommending booking
         lead.conversation_state = "profile_complete"
@@ -703,34 +894,37 @@ async def get_user_profile(user_id: str, platform: str = "facebook") -> Dict:
     return meta_api.get_user_profile(user_id, platform)
 
 
-async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead):
+async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead, lead_service: LeadService = None, conversation_service: ConversationService = None):
     """
     Gather user profile information after welcome message
-    Uses quick replies to collect name, email, phone
+    Uses simple text prompts to collect name, email, phone in order
     """
-    platform = "instagram" if channel == ConversationChannel.MESSENGER and False else "facebook"  # Will be set properly
     platform = "facebook" if channel == ConversationChannel.MESSENGER else "instagram"
     
     # Try to get profile from API first
     user_info = await get_user_profile(sender_id, platform)
     
-    # Check what info we already have
-    db = next(get_db())
-    lead_service = LeadService(db)
+    # Use provided services or create new ones
+    if not lead_service:
+        db = next(get_db())
+        lead_service = LeadService(db)
+    if not conversation_service:
+        conversation_service = ConversationService(lead_service.db)
     
     # Always ask for profile info in order: name -> email -> phone
     # Meta API might provide first_name, but we still want to collect complete info from user
     needs_info = []
     
-    # Check what we need - always ask unless user has already provided complete info
-    # For name: ask if missing or if we only have first_name from API
-    if not lead.name or lead.name == "Customer":
-        needs_info.append("name")
-    elif user_info.get("first_name") and lead.name == user_info.get("first_name"):
-        # We only have first_name from API, ask for full name
+    # Check what we need - ALWAYS ask user for info, even if API provided some
+    # We want to collect complete info directly from the user
+    
+    # For name: always ask if missing or if it's just from API (not from user input)
+    # Check if name is missing, "Customer", or matches API data (meaning it came from API, not user)
+    name_from_api = user_info.get("full_name") or user_info.get("first_name")
+    if not lead.name or lead.name == "Customer" or (name_from_api and lead.name == name_from_api):
         needs_info.append("name")
     
-    # For email: always ask if missing
+    # For email: always ask if missing (API email doesn't count - we want user's email)
     if not lead.email:
         needs_info.append("email")
     
@@ -738,45 +932,52 @@ async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead
     if not lead.phone:
         needs_info.append("phone")
     
-    # If we got info from API, update lead (but we'll still ask user for complete info)
-    if user_info.get("first_name") or user_info.get("full_name"):
-        if not lead.name or lead.name == "Customer":
-            lead.name = user_info.get("full_name") or user_info.get("first_name", "Customer")
-            lead_service.db.commit()
+    # Don't update lead from API - we want to ask user for all info
+    # Only update if lead has no name at all (to avoid "Customer" placeholder)
+    if (not lead.name or lead.name == "Customer") and (user_info.get("first_name") or user_info.get("full_name")):
+        # Temporarily set name from API, but we'll still ask user for confirmation/complete name
+        lead.name = user_info.get("full_name") or user_info.get("first_name", "Customer")
+        lead_service.db.commit()
     
-    # Always ask for profile info - don't skip even if API provided some
-    # If we still need info, ask for it
+    # Ask for profile info in order: name -> email -> phone
+    # Use simple text messages instead of quick replies with skip buttons
     if needs_info:
         if "name" in needs_info:
-            messenger_api.send_quick_replies(
-                recipient_id=sender_id,
-                message="Great! To get started, could you please share your name?",
-                quick_replies=[
-                    {"title": "Yes, my name is...", "payload": "SHARE_NAME"},
-                    {"title": "Skip for now", "payload": "SKIP_NAME"}
-                ]
+            profile_msg = "Please enter your name:"
+            messenger_api.send_message(recipient_id=sender_id, message=profile_msg)
+            conversation_service.save_message(
+                lead_id=lead.id,
+                channel=channel,
+                direction=MessageDirection.OUTBOUND,
+                message_text=profile_msg,
+                messenger_id=sender_id,
+                intent="gather_profile_name"
             )
             return "waiting_for_name"
         
         elif "email" in needs_info:
-            messenger_api.send_quick_replies(
-                recipient_id=sender_id,
-                message="Perfect! What's your email address? We'll send you a booking confirmation.",
-                quick_replies=[
-                    {"title": "Share Email", "payload": "SHARE_EMAIL"},
-                    {"title": "Skip", "payload": "SKIP_EMAIL"}
-                ]
+            profile_msg = "Please enter your email address:"
+            messenger_api.send_message(recipient_id=sender_id, message=profile_msg)
+            conversation_service.save_message(
+                lead_id=lead.id,
+                channel=channel,
+                direction=MessageDirection.OUTBOUND,
+                message_text=profile_msg,
+                messenger_id=sender_id,
+                intent="gather_profile_email"
             )
             return "waiting_for_email"
         
         elif "phone" in needs_info:
-            messenger_api.send_quick_replies(
-                recipient_id=sender_id,
-                message="And finally, what's your phone number? We'll send you reminders.",
-                quick_replies=[
-                    {"title": "Share Phone", "payload": "SHARE_PHONE"},
-                    {"title": "Skip", "payload": "SKIP_PHONE"}
-                ]
+            profile_msg = "Please enter your phone number:"
+            messenger_api.send_message(recipient_id=sender_id, message=profile_msg)
+            conversation_service.save_message(
+                lead_id=lead.id,
+                channel=channel,
+                direction=MessageDirection.OUTBOUND,
+                message_text=profile_msg,
+                messenger_id=sender_id,
+                intent="gather_profile_phone"
             )
             return "waiting_for_phone"
     

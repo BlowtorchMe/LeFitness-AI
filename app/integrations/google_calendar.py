@@ -43,24 +43,55 @@ class GoogleCalendar:
                     if hasattr(settings, 'google_service_account') and settings.google_service_account:
                         # Service account authentication
                         from google.oauth2 import service_account
-                        creds = service_account.Credentials.from_service_account_file(
-                            settings.google_service_account,
-                            scopes=self.SCOPES
-                        )
-                    else:
+                        
+                        # Check if google_service_account is a file path or JSON string
+                        service_account_data = settings.google_service_account
+                        
+                        # Try to parse as JSON first (for Vercel environment variables)
+                        try:
+                            service_account_info = json.loads(service_account_data)
+                            # If successful, it's a JSON string
+                            creds = service_account.Credentials.from_service_account_info(
+                                service_account_info,
+                                scopes=self.SCOPES
+                            )
+                        except (json.JSONDecodeError, TypeError):
+                            # If not valid JSON, treat as file path (for local development)
+                            if os.path.exists(service_account_data):
+                                creds = service_account.Credentials.from_service_account_file(
+                                    service_account_data,
+                                    scopes=self.SCOPES
+                                )
+                            else:
+                                raise Exception(f"Google service account not found: {service_account_data}")
+                    elif settings.google_client_config:
                         # OAuth flow (for first-time setup)
-                        flow = Flow.from_client_config(
-                            json.loads(settings.google_client_config),
-                            self.SCOPES
-                        )
-                        flow.redirect_uri = 'urn:ietf:wg:oauth:2.0:oob'
-                        auth_url, _ = flow.authorization_url(prompt='consent')
-                        # In production, this should be handled via web flow
-                        raise Exception(f"Please visit this URL to authorize: {auth_url}")
+                        try:
+                            client_config = json.loads(settings.google_client_config) if isinstance(settings.google_client_config, str) else settings.google_client_config
+                            flow = Flow.from_client_config(
+                                client_config,
+                                self.SCOPES
+                            )
+                            flow.redirect_uri = 'urn:ietf:wg:oauth:2.0:oob'
+                            auth_url, _ = flow.authorization_url(prompt='consent')
+                            # In production, this should be handled via web flow
+                            raise Exception(f"Please visit this URL to authorize: {auth_url}")
+                        except json.JSONDecodeError:
+                            raise Exception("Invalid Google client config JSON")
+                    else:
+                        raise Exception("No Google credentials provided")
                 
-                # Save credentials for next run
-                with open('token.json', 'w') as token:
-                    token.write(creds.to_json())
+                # Save credentials for next run (only if not using service account)
+                # Service accounts don't need token.json, only OAuth credentials do
+                from google.oauth2 import service_account as sa_module
+                if not isinstance(creds, sa_module.Credentials):
+                    # Only save OAuth credentials, not service account credentials
+                    try:
+                        with open('token.json', 'w') as token:
+                            token.write(creds.to_json())
+                    except (OSError, AttributeError):
+                        # Ignore if can't write (e.g., in Vercel read-only filesystem)
+                        pass
             
             self.service = build('calendar', 'v3', credentials=creds)
         

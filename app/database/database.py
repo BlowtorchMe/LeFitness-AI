@@ -4,9 +4,7 @@ Database connection and session management
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from app.config import settings
-from app.models.lead import Base as LeadBase
-from app.models.booking import Base as BookingBase
-from app.models.conversation import Base as ConversationBase
+from app.database.base import Base
 
 # Create database engine
 engine = create_engine(
@@ -20,24 +18,32 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
     """Initialize database tables"""
-    # Import all models to register them
+    # Import all models to register them with the shared Base
     from app.models import lead, booking, conversation
+    from sqlalchemy import text
     
-    # Create all tables using a single metadata that combines all bases
-    # This ensures proper foreign key relationships
-    from sqlalchemy import MetaData
-    metadata = MetaData()
+    # Drop all existing tables first using raw SQL (in reverse order of dependencies)
+    with engine.connect() as conn:
+        # Disable foreign key checks temporarily (PostgreSQL)
+        if "postgresql" in settings.database_url:
+            conn.execute(text("DROP TABLE IF EXISTS conversations CASCADE"))
+            conn.execute(text("DROP TABLE IF EXISTS bookings CASCADE"))
+            conn.execute(text("DROP TABLE IF EXISTS leads CASCADE"))
+        # SQLite
+        elif "sqlite" in settings.database_url:
+            conn.execute(text("DROP TABLE IF EXISTS conversations"))
+            conn.execute(text("DROP TABLE IF EXISTS bookings"))
+            conn.execute(text("DROP TABLE IF EXISTS leads"))
+        else:
+            # For other databases, try to drop in order
+            conn.execute(text("DROP TABLE IF EXISTS conversations"))
+            conn.execute(text("DROP TABLE IF EXISTS bookings"))
+            conn.execute(text("DROP TABLE IF EXISTS leads"))
+        conn.commit()
     
-    # Import all table definitions
-    for table in LeadBase.metadata.tables.values():
-        table.tometadata(metadata)
-    for table in BookingBase.metadata.tables.values():
-        table.tometadata(metadata)
-    for table in ConversationBase.metadata.tables.values():
-        table.tometadata(metadata)
-    
-    # Create all tables at once
-    metadata.create_all(bind=engine)
+    # Create all tables at once (SQLAlchemy will handle the order)
+    # Since all models now use the same Base, foreign keys will resolve correctly
+    Base.metadata.create_all(bind=engine)
 
 
 def get_db() -> Session:

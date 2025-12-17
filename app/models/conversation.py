@@ -2,11 +2,9 @@
 Conversation data model
 """
 from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Enum, Boolean
-from sqlalchemy.ext.declarative import declarative_base
+from app.database.base import Base
 from datetime import datetime
 import enum
-
-Base = declarative_base()
 
 
 class MessageDirection(enum.Enum):
