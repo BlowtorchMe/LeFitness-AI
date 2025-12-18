@@ -63,6 +63,7 @@ Steps to get the values for the Meta-related env vars:
    - Generate a **Page Access Token** for that page.
    - Use that token as `META_ACCESS_TOKEN`.
    - The Page ID is shown in the same area; use it for `META_PAGE_ID`.
+   - This same page can receive both Facebook Messenger and Instagram Direct messages when configured.
 
 3. **Set the webhook URL and verify token**
    - In Messenger → Webhooks, add a callback URL:
@@ -71,8 +72,14 @@ Steps to get the values for the Meta-related env vars:
    - Select the subscriptions (messages, messaging_postbacks, messaging_referrals, message_deliveries, message_reads).
    - Save and verify.
 
-4. **Subscribe the Page to the App**
-   - Still in Messenger settings, subscribe your Page to this app so that messages from users are delivered to this webhook.
+4. **Enable Instagram messaging (optional but recommended)**
+   - In the same app, add the **Instagram** product.
+   - In Instagram settings, connect the **Instagram Business account** that is linked to your Facebook Page.
+   - Make sure “Allow access to messages” is turned on for the Instagram account.
+   - In Webhooks, also enable the Instagram field (for example `instagram_messages`), so Instagram DMs are sent to the same `/webhooks/meta` endpoint.
+
+5. **Subscribe the Page to the App**
+   - Still in Messenger / Instagram settings, subscribe your Page (and Instagram account, if used) to this app so that messages from users are delivered to this webhook.
 
 For console-only testing, you can skip all of this and just put dummy values for Meta fields while keeping `USE_MOCK_APIS=true`.
 
