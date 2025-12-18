@@ -32,7 +32,6 @@ ENV/
 *.swp
 *.swo
 *~
-README.md
 
 # Environment variables
 .env
