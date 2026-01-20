@@ -174,84 +174,40 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
     lead = lead_service.get_lead_by_messenger_id(sender_id)
     
     if not lead:
-        # Create new lead from first message
-        # Try to get user profile info from META API (but we'll still ask user for complete info)
         user_info = await get_user_profile(sender_id)
         platform_name = "messenger" if channel == ConversationChannel.MESSENGER else "instagram"
-        # Don't use email from API - we'll ask user for it
+        
+        referral = event.get("referral")
+        ad_campaign = None
+        if referral:
+            ad_campaign = referral.get("ref", "")
+        
         lead = lead_service.create_lead(
-            name=user_info.get("first_name", "Customer"),  # May only be first name
+            name=user_info.get("first_name", "Customer"),
             messenger_id=sender_id,
             platform=platform_name,
-            email=None,  # Always ask user for email
-            source="meta_ad" if event.get("referral") else platform_name
+            email=None,
+            source="meta_ad" if referral else platform_name,
+            ad_campaign=ad_campaign
         )
         
-        # For new leads from first message: send welcome and start profile gathering
-        # User sent first message, so send welcome and start profile gathering
-        welcome_msg = chat_handler.get_welcome_message(lead.name if lead.name != "Customer" else None)
-        messenger_api.send_message(recipient_id=sender_id, message=welcome_msg)
-        
-        # Save welcome message to database
-        conversation_service.save_message(
-            lead_id=lead.id,
-            channel=channel,
-            direction=MessageDirection.OUTBOUND,
-            message_text=welcome_msg,
-            messenger_id=sender_id
-        )
-        
-        # Start profile gathering immediately after welcome
-        lead.notes = None
-        needs_info = []
-        if not lead.name or lead.name == "Customer":
-            needs_info.append("name")
-        if not lead.email:
-            needs_info.append("email")
-        if not lead.phone:
-            needs_info.append("phone")
-        
-        # If we need any info, start gathering using gather_profile_info (pass existing services)
-        if needs_info:
-            status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
-            if status != "complete":
-                lead.notes = f"profile_status:{status}"
-                lead.conversation_state = "gathering_profile"
-                lead_service.db.commit()
-                return
-        else:
-            # All info already collected - move to booking
-            lead.conversation_state = "profile_complete"
-            lead.notes = None
-        
-        lead_service.db.commit()
-        return
-    
-    # Check if this is first message from user (not from opt-in event)
-    # Send welcome and start profile gathering
-    if not lead.conversation_state or lead.conversation_state == "welcome":
-        # First message from user - send welcome and start profile gathering
-        welcome_msg = chat_handler.get_welcome_message(lead.name if lead.name != "Customer" else None)
-        messenger_api.send_message(recipient_id=sender_id, message=welcome_msg)
-        
-        # Save welcome message to database
-        conversation_service.save_message(
-            lead_id=lead.id,
-            channel=channel,
-            direction=MessageDirection.OUTBOUND,
-            message_text=welcome_msg,
-            messenger_id=sender_id
-        )
-        
-        # Start profile gathering using gather_profile_info (pass existing services)
-        lead.notes = None
-        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
+        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service, start_with_email=True)
         if status != "complete":
             lead.notes = f"profile_status:{status}"
             lead.conversation_state = "gathering_profile"
         else:
             lead.conversation_state = "profile_complete"
-        
+        lead_service.db.commit()
+        return
+    
+    if not lead.conversation_state or lead.conversation_state == "welcome":
+        lead.notes = None
+        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service, start_with_email=True)
+        if status != "complete":
+            lead.notes = f"profile_status:{status}"
+            lead.conversation_state = "gathering_profile"
+        else:
+            lead.conversation_state = "profile_complete"
         lead_service.db.commit()
         return
     
@@ -513,42 +469,22 @@ async def handle_optin_event(event: Dict, channel: ConversationChannel):
     lead = lead_service.get_lead_by_messenger_id(sender_id)
     
     if not lead:
-        # Get user profile
         user_info = await get_user_profile(sender_id)
         platform_name = "messenger" if channel == ConversationChannel.MESSENGER else "instagram"
         
-        # Create lead from ad click (but we'll still ask user for complete info)
         lead = lead_service.create_lead(
-            name=user_info.get("first_name", "Customer"),  # May only be first name
+            name=user_info.get("first_name", "Customer"),
             messenger_id=sender_id,
             platform=platform_name,
-            email=None,  # Always ask user for email
+            email=None,
             source="meta_ad",
             ad_campaign=ref
         )
     
-    # Send welcome message first
-    welcome_msg = chat_handler.get_welcome_message(lead.name if lead.name != "Customer" else None)
-    messenger_api.send_message(recipient_id=sender_id, message=welcome_msg)
-    
-    # Save welcome message to database
     conversation_service = ConversationService(lead_service.db)
-    conversation_service.save_message(
-        lead_id=lead.id,
-        channel=channel,
-        direction=MessageDirection.OUTBOUND,
-        message_text=welcome_msg,
-        messenger_id=sender_id
-    )
-    lead_service.db.commit()
     
-    # Small delay to ensure messages appear separately in Facebook Messenger
-    import asyncio
-    await asyncio.sleep(0.5)
-    
-    # Then immediately start profile gathering (as a separate message)
     lead.notes = None
-    status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
+    status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service, start_with_email=True)
     if status != "complete":
         lead.notes = f"profile_status:{status}"
         lead.conversation_state = "gathering_profile"
@@ -644,6 +580,31 @@ async def handle_postback(sender_id: str, payload: str, channel: ConversationCha
     lead_service = LeadService(db)
     booking_service = BookingService(db)
     lead = lead_service.get_lead_by_messenger_id(sender_id)
+    
+    if payload == "new_conversation_started":
+        if not lead:
+            user_info = await get_user_profile(sender_id)
+            platform_name = "messenger" if channel == ConversationChannel.MESSENGER else "instagram"
+            
+            lead = lead_service.create_lead(
+                name=user_info.get("first_name", "Customer"),
+                messenger_id=sender_id,
+                platform=platform_name,
+                email=None,
+                source="meta_ad",
+                ad_campaign=None
+            )
+        
+        conversation_service = ConversationService(lead_service.db)
+        
+        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service, start_with_email=True)
+        if status != "complete":
+            lead.notes = f"profile_status:{status}"
+            lead.conversation_state = "gathering_profile"
+        else:
+            lead.conversation_state = "profile_complete"
+        lead_service.db.commit()
+        return
     
     if not lead:
         return
@@ -847,55 +808,52 @@ async def get_user_profile(user_id: str, platform: str = "facebook") -> Dict:
     return meta_api.get_user_profile(user_id, platform)
 
 
-async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead, lead_service: LeadService = None, conversation_service: ConversationService = None):
+async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead, lead_service: LeadService = None, conversation_service: ConversationService = None, start_with_email: bool = False):
     """
-    Gather user profile information after welcome message
-    Uses simple text prompts to collect name, email, phone in order
+    Gather user profile information
+    Uses simple text prompts to collect name, email, phone
+    If start_with_email is True, starts with email instead of name
     """
     platform = "facebook" if channel == ConversationChannel.MESSENGER else "instagram"
     
-    # Try to get profile from API first
     user_info = await get_user_profile(sender_id, platform)
     
-    # Use provided services or create new ones
     if not lead_service:
         db = next(get_db())
         lead_service = LeadService(db)
     if not conversation_service:
         conversation_service = ConversationService(lead_service.db)
     
-    # Always ask for profile info in order: name -> email -> phone
-    # Meta API might provide first_name, but we still want to collect complete info from user
     needs_info = []
     
-    # Check what we need - ALWAYS ask user for info, even if API provided some
-    # We want to collect complete info directly from the user
-    
-    # For name: always ask if missing or if it's just from API (not from user input)
-    # Check if name is missing, "Customer", or matches API data (meaning it came from API, not user)
     name_from_api = user_info.get("full_name") or user_info.get("first_name")
     if not lead.name or lead.name == "Customer" or (name_from_api and lead.name == name_from_api):
         needs_info.append("name")
     
-    # For email: always ask if missing (API email doesn't count - we want user's email)
     if not lead.email:
         needs_info.append("email")
     
-    # For phone: always ask if missing
     if not lead.phone:
         needs_info.append("phone")
     
-    # Don't update lead from API - we want to ask user for all info
-    # Only update if lead has no name at all (to avoid "Customer" placeholder)
     if (not lead.name or lead.name == "Customer") and (user_info.get("first_name") or user_info.get("full_name")):
-        # Temporarily set name from API, but we'll still ask user for confirmation/complete name
         lead.name = user_info.get("full_name") or user_info.get("first_name", "Customer")
         lead_service.db.commit()
     
-    # Ask for profile info in order: name -> email -> phone
-    # Use simple text messages instead of quick replies with skip buttons
     if needs_info:
-        if "name" in needs_info:
+        if start_with_email and "email" in needs_info:
+            profile_msg = "Please enter your email address:"
+            messenger_api.send_message(recipient_id=sender_id, message=profile_msg)
+            conversation_service.save_message(
+                lead_id=lead.id,
+                channel=channel,
+                direction=MessageDirection.OUTBOUND,
+                message_text=profile_msg,
+                messenger_id=sender_id,
+                intent="gather_profile_email"
+            )
+            return "waiting_for_email"
+        elif "name" in needs_info:
             profile_msg = "Please enter your name:"
             messenger_api.send_message(recipient_id=sender_id, message=profile_msg)
             conversation_service.save_message(
@@ -907,7 +865,6 @@ async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead
                 intent="gather_profile_name"
             )
             return "waiting_for_name"
-        
         elif "email" in needs_info:
             profile_msg = "Please enter your email address:"
             messenger_api.send_message(recipient_id=sender_id, message=profile_msg)
@@ -920,7 +877,6 @@ async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead
                 intent="gather_profile_email"
             )
             return "waiting_for_email"
-        
         elif "phone" in needs_info:
             profile_msg = "Please enter your phone number:"
             messenger_api.send_message(recipient_id=sender_id, message=profile_msg)
@@ -934,6 +890,5 @@ async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead
             )
             return "waiting_for_phone"
     
-    # All info gathered, proceed to booking
     return "complete"
 

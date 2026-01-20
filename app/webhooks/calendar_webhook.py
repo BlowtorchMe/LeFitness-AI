@@ -36,21 +36,29 @@ async def handle_calendar_webhook(request: Request):
     Handle Google Calendar push notifications
     Called when events are created, updated, or deleted
     """
-    # Google sends notifications as POST with headers
     headers = dict(request.headers)
     
-    # Check if this is a sync notification (initial setup)
-    if headers.get("x-goog-resource-state") == "sync":
-        # This is just the initial sync, acknowledge it
+    resource_state = headers.get("x-goog-resource-state") or headers.get("X-Goog-Resource-State")
+    
+    print(f"[CALENDAR WEBHOOK] Received notification - resource_state: {resource_state}")
+    
+    if resource_state == "sync":
+        print("[CALENDAR WEBHOOK] Sync notification acknowledged")
         return {"status": "ok", "message": "sync acknowledged"}
     
-    # Check if this is a change notification
-    if headers.get("x-goog-resource-state") in ["exists", "not_exists"]:
-        # Calendar has changed - scan for new events
-        await process_calendar_changes()
-        return {"status": "ok", "message": "change processed"}
+    if resource_state in ["exists", "not_exists"]:
+        print("[CALENDAR WEBHOOK] Change notification - processing calendar changes")
+        try:
+            await process_calendar_changes()
+            print("[CALENDAR WEBHOOK] Calendar changes processed successfully")
+            return {"status": "ok", "message": "change processed"}
+        except Exception as e:
+            print(f"[CALENDAR WEBHOOK] Error processing changes: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
     
-    # For other cases, just acknowledge
+    print(f"[CALENDAR WEBHOOK] Unknown resource_state: {resource_state}, acknowledging")
     return {"status": "ok"}
 
 
@@ -68,37 +76,54 @@ async def process_calendar_changes():
     # Only process if calendar is configured
     if not calendar:
         if settings.google_calendar_id and settings.google_service_account:
-            # Try to initialize calendar
             try:
                 calendar = GoogleCalendar()
-            except Exception:
-                return  # Calendar not available
+                print("[CALENDAR WEBHOOK] Calendar initialized successfully")
+            except Exception as e:
+                print(f"[CALENDAR WEBHOOK] Failed to initialize calendar: {e}")
+                import traceback
+                traceback.print_exc()
+                return
         else:
-            return  # Calendar not configured
+            print("[CALENDAR WEBHOOK] Calendar not configured (missing google_calendar_id or google_service_account)")
+            return
     
     db = SessionLocal()
     try:
         lead_service = LeadService(db)
         booking_service = BookingService(db)
         
-        # Get events from last 2 hours (new bookings)
-        start_time = datetime.utcnow() - timedelta(hours=2)
-        events = calendar.get_recent_events(start_time=start_time) if calendar.service else []
+        print("[CALENDAR WEBHOOK] Fetching recent calendar events...")
         
-        # Process all new events - save to database
+        start_time = datetime.utcnow() - timedelta(hours=24)
+        end_time = datetime.utcnow() + timedelta(days=90)
+        
+        events = []
+        if calendar and calendar.service:
+            events = calendar.get_recent_events(start_time=start_time, end_time=end_time)
+            print(f"[CALENDAR WEBHOOK] Found {len(events)} events in time range")
+        else:
+            print("[CALENDAR WEBHOOK] Calendar service not available")
+            return
+        
+        print(f"[CALENDAR WEBHOOK] Processing {len(events)} events...")
+        
+        new_bookings_count = 0
+        matched_leads_count = 0
+        
         for event in events:
             event_id = event.get("id")
             if not event_id:
                 continue
             
-            # Check if booking already exists for this event
             existing_booking = db.query(Booking).filter(
                 Booking.external_booking_id == event_id
             ).first()
             
             if existing_booking:
-                # Already saved, skip
                 continue
+            
+            print(f"[CALENDAR WEBHOOK] Processing new event: {event_id}")
             
             # Parse event details
             event_start = event.get("start", {}).get("dateTime")
@@ -119,16 +144,22 @@ async def process_calendar_changes():
             event_summary = event.get("summary", "")
             customer_name = attendee_name or event_summary.split("-")[-1].strip() if "-" in event_summary else event_summary or "Customer"
             
-            # Try to find matching lead by email or name
             lead = None
             if attendee_email:
                 lead = lead_service.get_lead_by_email(attendee_email)
+                if lead:
+                    print(f"[CALENDAR WEBHOOK] Matched lead by email: {attendee_email} -> Lead ID: {lead.id}")
             
             if not lead and customer_name and customer_name != "Customer":
-                # Try to find by name
-                leads = db.query(Lead).filter(Lead.name.ilike(f"%{customer_name.split()[0]}%")).all()
-                if leads:
-                    lead = leads[0]  # Take first match
+                first_name = customer_name.split()[0] if customer_name else None
+                if first_name and len(first_name) > 2:
+                    leads = db.query(Lead).filter(Lead.name.ilike(f"%{first_name}%")).all()
+                    if leads:
+                        lead = leads[0]
+                        print(f"[CALENDAR WEBHOOK] Matched lead by name: {customer_name} -> Lead ID: {lead.id}")
+            
+            if not lead:
+                print(f"[CALENDAR WEBHOOK] No lead matched for event {event_id} (email: {attendee_email}, name: {customer_name})")
             
             # Calculate duration from event
             event_end = event.get("end", {}).get("dateTime")
@@ -156,12 +187,15 @@ async def process_calendar_changes():
             )
             
             db.add(booking)
+            new_bookings_count += 1
             
-            # Update lead if matched
             if lead:
+                matched_leads_count += 1
                 lead.status = LeadStatus.BOOKED
+                lead.booking_id = booking.id
+                lead.booking_date = event_dt
                 lead.notes = f"calendar_booking_saved:{event_id}"
-                # Notify user via Messenger/Instagram with confirmation and thanks
+                
                 if lead.messenger_id:
                     confirmation_message = (
                         f"Perfect! I've confirmed your booking for {event_dt.strftime('%B %d at %I:%M %p')}.\n\n"
@@ -169,15 +203,20 @@ async def process_calendar_changes():
                         f"Thank you for choosing {settings.gym_name}! We're excited to welcome you and help you start your fitness journey.\n\n"
                         f"If you have any questions before your visit, just let me know. Looking forward to seeing you!"
                     )
-                    messenger_api.send_message(
-                        recipient_id=lead.messenger_id,
-                        message=confirmation_message
-                    )
+                    try:
+                        messenger_api.send_message(
+                            recipient_id=lead.messenger_id,
+                            message=confirmation_message
+                        )
+                        print(f"[CALENDAR WEBHOOK] Sent confirmation message to lead {lead.id}")
+                    except Exception as e:
+                        print(f"[CALENDAR WEBHOOK] Error sending message to lead {lead.id}: {e}")
         
         db.commit()
+        print(f"[CALENDAR WEBHOOK] Processed {new_bookings_count} new bookings, matched {matched_leads_count} leads")
         
     except Exception as e:
-        print(f"Error processing calendar changes: {e}")
+        print(f"[CALENDAR WEBHOOK] Error processing calendar changes: {e}")
         import traceback
         traceback.print_exc()
         db.rollback()
