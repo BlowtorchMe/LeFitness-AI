@@ -53,7 +53,10 @@ class Lead(Base):
     
     # Conversation state
     conversation_state = Column(String(50), default="welcome")  # Track conversation flow state
-    
+
+    # Language preference (en, sv)
+    language = Column(String(5), default="en", nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -24,31 +24,22 @@ class ConversationService:
         intent: Optional[str] = None,
         ai_response: Optional[str] = None,
         faq_used: Optional[str] = None,
-        needs_human: bool = False
+        needs_human: bool = False,
+        message_text_en: Optional[str] = None,
+        message_text_sv: Optional[str] = None,
     ) -> Conversation:
         """
-        Save a conversation message to database
-        
-        Args:
-            lead_id: Lead ID (if available)
-            channel: Conversation channel (MESSENGER, SMS, etc.)
-            direction: Message direction (INBOUND or OUTBOUND)
-            message_text: Message content
-            messenger_id: Messenger/Instagram user ID (for MESSENGER channel)
-            phone_number: Phone number (for SMS channel)
-            intent: Detected intent (for inbound messages)
-            ai_response: AI response text (for outbound messages)
-            faq_used: FAQ used (if applicable)
-            needs_human: Whether message needs human intervention
-        
-        Returns:
-            Conversation object
+        Save a conversation message. Use message_text_en/message_text_sv when both languages are stored.
         """
+        text_en = message_text_en if message_text_en is not None else message_text
+        text_sv = message_text_sv
         conversation = Conversation(
             lead_id=lead_id,
             channel=channel,
             direction=direction,
-            message_text=message_text,
+            message_text=text_en,
+            message_text_en=text_en,
+            message_text_sv=text_sv,
             messenger_id=messenger_id,
             phone_number=phone_number,
             intent=intent,
@@ -101,33 +92,27 @@ class ConversationService:
         lead_id: Optional[int] = None,
         messenger_id: Optional[str] = None,
         phone_number: Optional[str] = None,
-        limit: int = 20
+        limit: int = 20,
+        lang: str = "en",
     ) -> list:
-        """
-        Get conversation history formatted for AI processing
-        
-        Returns:
-            List of dicts with 'role' and 'content' keys
-        """
+        """Get conversation history for AI. lang in ('en','sv') picks which text to use."""
         conversations = self.get_conversation_history(
             lead_id=lead_id,
             messenger_id=messenger_id,
             phone_number=phone_number,
             limit=limit
         )
-        
         history = []
-        for conv in reversed(conversations):  # Reverse to get chronological order
+        for conv in reversed(conversations):
+            if lang == "sv" and conv.message_text_sv:
+                content = conv.message_text_sv
+            elif conv.message_text_en:
+                content = conv.message_text_en
+            else:
+                content = conv.message_text
             if conv.direction == MessageDirection.INBOUND:
-                history.append({
-                    "role": "user",
-                    "content": conv.message_text
-                })
+                history.append({"role": "user", "content": content})
             elif conv.direction == MessageDirection.OUTBOUND:
-                history.append({
-                    "role": "assistant",
-                    "content": conv.message_text
-                })
-        
+                history.append({"role": "assistant", "content": content})
         return history
 

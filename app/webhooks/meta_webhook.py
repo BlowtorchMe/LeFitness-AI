@@ -2,19 +2,31 @@
 META (Facebook/Instagram) webhook handler
 Supports both Facebook Messenger and Instagram Direct Messages
 """
-from fastapi import APIRouter, Request, HTTPException, Query
-from pydantic import BaseModel
+from datetime import datetime, timedelta
 from typing import Optional, Dict
+
+from fastapi import APIRouter, Request, HTTPException, Query
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
+from sqlalchemy import desc
+
+from app.ai.chat_handler import ChatHandler
+from app.ai.conversation_flow import ConversationFlow
 from app.config import settings
+from app.database.database import get_db
 from app.integrations.meta_api import MetaAPI
 from app.integrations.messenger_api import MessengerAPI
+from app.integrations.mock_meta_api import MockMetaAPI, MockMessengerAPI
+from app.models.conversation import ConversationChannel, MessageDirection, Conversation
+from app.services.booking_service import BookingService
+from app.services.lead_service import LeadService
+from app.services.conversation_service import ConversationService
 
 # Use real Meta APIs - only use mocks if explicitly enabled AND no access token
 use_mocks = (settings.use_mock_apis or settings.test_mode) and not settings.meta_access_token
 
 if use_mocks:
     print("[WARNING] Using MOCK APIs - messages will NOT be sent to real users!")
-    from app.integrations.mock_meta_api import MockMetaAPI, MockMessengerAPI
     meta_api = MockMetaAPI()
     messenger_api = MockMessengerAPI()
 else:
@@ -24,14 +36,6 @@ else:
         print("[INFO] Using REAL Meta APIs")
     meta_api = MetaAPI()
     messenger_api = MessengerAPI()
-from app.services.lead_service import LeadService
-from app.services.booking_service import BookingService
-from app.services.conversation_service import ConversationService
-from app.ai.chat_handler import ChatHandler
-from app.database.database import get_db
-from app.models.conversation import ConversationChannel, MessageDirection, Conversation
-from sqlalchemy import desc
-from datetime import datetime
 
 router = APIRouter()
 
@@ -59,8 +63,6 @@ async def verify_webhook(
     challenge_response = meta_api.verify_webhook(mode, token, challenge)
     
     if challenge_response:
-        # Return challenge as plain text (Meta expects the challenge string)
-        from fastapi.responses import PlainTextResponse
         return PlainTextResponse(challenge)
     else:
         raise HTTPException(status_code=403, detail="Verification failed")
@@ -108,23 +110,19 @@ async def handle_webhook(request: Request):
                     await handle_optin_event(event, ConversationChannel.MESSENGER)
     
     elif data.get("object") == "instagram":
-        # Instagram Direct Message events
+        # Instagram Direct Message events (same Send API, different channel for storage)
         for entry in data.get("entry", []):
             messaging_events = entry.get("messaging", [])
             
             for event in messaging_events:
-                # CRITICAL: Ignore echo events (bot's own messages) to prevent infinite loops
                 message = event.get("message", {})
                 if message.get("is_echo"):
                     print("[WEBHOOK] Ignoring echo event (bot's own message)")
                     continue
-                
-                # Ignore delivery/read events
                 if "delivery" in event or "read" in event:
                     print("[WEBHOOK] Ignoring delivery/read event")
                     continue
-                
-                await handle_messaging_event(event, ConversationChannel.MESSENGER)  # Same API
+                await handle_messaging_event(event, ConversationChannel.INSTAGRAM)
     
     return {"status": "ok"}
 
@@ -191,7 +189,7 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
             ad_campaign=ad_campaign
         )
         
-        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service, start_with_email=True)
+        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
         if status != "complete":
             lead.notes = f"profile_status:{status}"
             lead.conversation_state = "gathering_profile"
@@ -202,7 +200,7 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
     
     if not lead.conversation_state or lead.conversation_state == "welcome":
         lead.notes = None
-        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service, start_with_email=True)
+        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
         if status != "complete":
             lead.notes = f"profile_status:{status}"
             lead.conversation_state = "gathering_profile"
@@ -284,9 +282,6 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
         # If user asks about booking or calendar, provide the link again
         booking_keywords = ["book", "booking", "calendar", "appointment", "schedule", "time", "plz", "please", "link"]
         if any(keyword in message_text.lower() for keyword in booking_keywords):
-            from app.ai.conversation_flow import ConversationFlow
-            from datetime import datetime
-            
             flow = ConversationFlow()
             calendar_link = flow._get_calendar_link(datetime.now())
             
@@ -329,9 +324,6 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
     )
     
     # Handle state transitions
-    from app.ai.conversation_flow import ConversationFlow
-    from app.services.booking_service import BookingService
-    
     flow = ConversationFlow()
     booking_service = BookingService(lead_service.db)
     
@@ -385,9 +377,6 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
     
     # If user asks for calendar/booking, provide appointment schedule link
     if is_calendar_request and current_state in ["profile_complete", "recommending_booking", "collecting_booking_details"]:
-        from datetime import datetime
-        from app.ai.conversation_flow import ConversationFlow
-        
         flow = ConversationFlow()
         
         # Provide appointment schedule link directly
@@ -484,7 +473,7 @@ async def handle_optin_event(event: Dict, channel: ConversationChannel):
     conversation_service = ConversationService(lead_service.db)
     
     lead.notes = None
-    status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service, start_with_email=True)
+    status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
     if status != "complete":
         lead.notes = f"profile_status:{status}"
         lead.conversation_state = "gathering_profile"
@@ -522,9 +511,6 @@ async def handle_profile_gathering(
             lead.notes = None
             lead_service.db.commit()
             
-            # Proactively recommend booking
-            from app.ai.conversation_flow import ConversationFlow
-            from app.services.booking_service import BookingService
             flow = ConversationFlow()
             booking_service = BookingService(lead_service.db)
             await flow._recommend_booking(lead, sender_id, lead_service)
@@ -546,9 +532,6 @@ async def handle_profile_gathering(
             lead.notes = None
             lead_service.db.commit()
             
-            # Proactively recommend booking
-            from app.ai.conversation_flow import ConversationFlow
-            from app.services.booking_service import BookingService
             flow = ConversationFlow()
             booking_service = BookingService(lead_service.db)
             await flow._recommend_booking(lead, sender_id, lead_service)
@@ -566,9 +549,6 @@ async def handle_profile_gathering(
         lead.notes = None
         lead_service.db.commit()
         
-        # Proactively recommend booking (agent leads conversation)
-        from app.ai.conversation_flow import ConversationFlow
-        from app.services.booking_service import BookingService
         flow = ConversationFlow()
         booking_service = BookingService(lead_service.db)
         await flow._recommend_booking(lead, sender_id, lead_service)
@@ -597,7 +577,7 @@ async def handle_postback(sender_id: str, payload: str, channel: ConversationCha
         
         conversation_service = ConversationService(lead_service.db)
         
-        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service, start_with_email=True)
+        status = await gather_profile_info(sender_id, channel, lead, lead_service, conversation_service)
         if status != "complete":
             lead.notes = f"profile_status:{status}"
             lead.conversation_state = "gathering_profile"
@@ -613,8 +593,6 @@ async def handle_postback(sender_id: str, payload: str, channel: ConversationCha
     
     # Handle booking-related postbacks
     if payload == "BOOK_NOW" or payload.startswith("BOOK_"):
-        # User wants to book - transition to collecting details
-        from app.ai.conversation_flow import ConversationFlow
         flow = ConversationFlow()
         
         if payload in ["BOOK_TOMORROW", "BOOK_THIS_WEEK", "BOOK_NEXT_WEEK"]:
@@ -634,9 +612,6 @@ async def handle_postback(sender_id: str, payload: str, channel: ConversationCha
             # User confirmed booking
             await flow._create_booking(lead, sender_id, booking_service, lead_service)
         elif payload == "BOOK_MORE_TIMES":
-            # User wants to see more time slots
-            # Show next set of slots or offer calendar link
-            from datetime import datetime, timedelta
             tomorrow = datetime.now() + timedelta(days=1)
             slots = booking_service.get_available_slots(tomorrow)
             
@@ -679,9 +654,6 @@ async def handle_postback(sender_id: str, payload: str, channel: ConversationCha
                 lead.updated_at = datetime.utcnow()  # Update timestamp for follow-up task
                 lead_service.db.commit()
         elif payload.startswith("BOOK_MORNING") or payload.startswith("BOOK_AFTERNOON") or payload.startswith("BOOK_EVENING"):
-            # User selected time preference (morning/afternoon/evening)
-            # Find available slot in that time range
-            from datetime import datetime, timedelta
             tomorrow = datetime.now() + timedelta(days=1)
             
             time_range = {
@@ -808,11 +780,9 @@ async def get_user_profile(user_id: str, platform: str = "facebook") -> Dict:
     return meta_api.get_user_profile(user_id, platform)
 
 
-async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead, lead_service: LeadService = None, conversation_service: ConversationService = None, start_with_email: bool = False):
+async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead, lead_service: LeadService = None, conversation_service: ConversationService = None):
     """
-    Gather user profile information
-    Uses simple text prompts to collect name, email, phone
-    If start_with_email is True, starts with email instead of name
+    Gather user profile information: name, email, phone (in that order).
     """
     platform = "facebook" if channel == ConversationChannel.MESSENGER else "instagram"
     
@@ -841,19 +811,7 @@ async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead
         lead_service.db.commit()
     
     if needs_info:
-        if start_with_email and "email" in needs_info:
-            profile_msg = "Please enter your email address:"
-            messenger_api.send_message(recipient_id=sender_id, message=profile_msg)
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=channel,
-                direction=MessageDirection.OUTBOUND,
-                message_text=profile_msg,
-                messenger_id=sender_id,
-                intent="gather_profile_email"
-            )
-            return "waiting_for_email"
-        elif "name" in needs_info:
+        if "name" in needs_info:
             profile_msg = "Please enter your name:"
             messenger_api.send_message(recipient_id=sender_id, message=profile_msg)
             conversation_service.save_message(

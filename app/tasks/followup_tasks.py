@@ -1,13 +1,19 @@
 """
 Follow-up background tasks
 """
+import asyncio
+from datetime import datetime, timedelta
+
 from app.celery_app import celery_app
+from app.database.database import SessionLocal
+from app.integrations.google_calendar import GoogleCalendar
+from app.integrations.messenger_api import MessengerAPI
+from app.models.lead import Lead
+from app.services.booking_service import BookingService
+from app.services.calendar_tracking import CalendarTrackingService
 from app.services.followup_service import FollowupService
 from app.services.lead_service import LeadService
-from app.services.calendar_tracking import CalendarTrackingService
-from app.integrations.messenger_api import MessengerAPI
-from app.database.database import SessionLocal
-from datetime import datetime, timedelta
+from app.webhooks.calendar_webhook import _process_matched_booking
 
 
 @celery_app.task
@@ -44,8 +50,6 @@ def followup_calendar_link_users():
     """
     db = SessionLocal()
     try:
-        from app.models.lead import Lead
-        
         # Find leads who clicked calendar link 2-5 minutes ago
         time_window_start = datetime.utcnow() - timedelta(minutes=5)
         time_window_end = datetime.utcnow() - timedelta(minutes=2)
@@ -93,9 +97,6 @@ def scan_calendar_for_bookings():
     """
     db = SessionLocal()
     try:
-        from app.integrations.google_calendar import GoogleCalendar
-        from app.models.lead import Lead
-        
         calendar = GoogleCalendar()
         tracking_service = CalendarTrackingService(db)
         
@@ -103,18 +104,11 @@ def scan_calendar_for_bookings():
         matches = tracking_service.check_for_calendar_bookings(hours_window=2)
         
         # Process matches (this will create bookings and notify users)
-        from app.services.lead_service import LeadService
-        from app.services.booking_service import BookingService
-        
         lead_service = LeadService(db)
         booking_service = BookingService(db)
         
         processed = 0
         if matches:
-            # Import async function properly
-            import asyncio
-            from app.webhooks.calendar_webhook import _process_matched_booking
-            
             for match in matches:
                 asyncio.run(_process_matched_booking(
                     match["lead"],

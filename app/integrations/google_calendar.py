@@ -1,17 +1,20 @@
 """
 Google Calendar integration
 """
+import json
+import os
+import uuid
+from datetime import datetime, timedelta
+from typing import Dict, Optional, List
+
+from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
 from app.config import settings
-from typing import Dict, Optional, List
-from datetime import datetime, timedelta
-import json
-import os
-import uuid
 
 
 class GoogleCalendar:
@@ -41,9 +44,6 @@ class GoogleCalendar:
                 else:
                     # Use service account or OAuth flow
                     if hasattr(settings, 'google_service_account') and settings.google_service_account:
-                        # Service account authentication
-                        from google.oauth2 import service_account
-                        
                         # Check if google_service_account is a file path or JSON string
                         service_account_data = settings.google_service_account
                         
@@ -82,9 +82,7 @@ class GoogleCalendar:
                         raise Exception("No Google credentials provided")
                 
                 # Save credentials for next run (only if not using service account)
-                # Service accounts don't need token.json, only OAuth credentials do
-                from google.oauth2 import service_account as sa_module
-                if not isinstance(creds, sa_module.Credentials):
+                if not isinstance(creds, service_account.Credentials):
                     # Only save OAuth credentials, not service account credentials
                     try:
                         with open('token.json', 'w') as token:

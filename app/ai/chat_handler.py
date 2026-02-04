@@ -5,6 +5,7 @@ import openai
 from typing import Optional, Dict, List
 from app.config import settings
 from app.ai.prompts import SYSTEM_PROMPT, FAQ_CONTEXT
+from app.ai.translations import get as t
 from app.ai.faq_handler import FAQHandler
 from app.ai.intent_recognizer import IntentRecognizer
 from app.ai.conversation_state import ConversationState, ConversationFlowManager
@@ -30,7 +31,8 @@ class ChatHandler:
         user_message: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         customer_info: Optional[Dict] = None,
-        conversation_state: Optional[str] = None
+        conversation_state: Optional[str] = None,
+        language: str = "en",
     ) -> Dict[str, any]:
         """
         Process a user message and generate an AI response
@@ -60,10 +62,15 @@ class ChatHandler:
         # Build conversation context
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
-        # Add state-specific guidance
         messages.append({
             "role": "system",
-            "content": f"""Current conversation state: {current_state.value}
+            "content": f"""Generate your reply in BOTH English and Swedish. Use exactly this format (nothing else):
+---EN---
+[Your full response in English here]
+---SV---
+[Your full response in Swedish here]
+
+Current conversation state: {current_state.value}
             
 {state_prompt}
 
@@ -97,13 +104,9 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
         # Add current user message
         messages.append({"role": "user", "content": user_message})
         
-        # Generate response
         if not self.client:
-            return {
-                "response": "I'm sorry, the AI service is not configured. Please contact support.",
-                "intent": "error",
-                "next_state": conversation_state
-            }
+            err = "I'm sorry, the AI service is not configured. Please contact support."
+            return {"response": err, "response_en": err, "response_sv": None, "intent": "error", "next_state": conversation_state}
         
         try:
             response = self.client.chat.completions.create(
@@ -113,25 +116,28 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 max_tokens=500
             )
             
-            ai_response = response.choices[0].message.content
-            
-            # Determine next state based on intent and current state
+            raw = response.choices[0].message.content
+            response_en, response_sv = self._parse_bilingual_response(raw)
+            single = response_en or response_sv or raw
             next_state = self._determine_next_state(current_state, intent, user_message, customer_info)
-            
             return {
-                "response": ai_response,
+                "response": single,
+                "response_en": response_en,
+                "response_sv": response_sv,
                 "intent": intent,
                 "current_state": current_state.value,
                 "next_state": next_state.value if next_state else current_state.value,
                 "faq_used": faq_answer is not None,
-                "needs_human": self._should_escalate(user_message, ai_response),
+                "needs_human": self._should_escalate(user_message, single),
                 "should_proceed": self._should_proceed_to_next_state(current_state, intent)
             }
         
         except Exception as e:
-            # Fallback response
+            fallback = f"I apologize, but I'm having trouble right now. Please call us at {settings.gym_phone} and we'll be happy to help!"
             return {
-                "response": f"I apologize, but I'm having trouble right now. Please call us at {settings.gym_phone} and we'll be happy to help!",
+                "response": fallback,
+                "response_en": fallback,
+                "response_sv": None,
                 "intent": "error",
                 "current_state": current_state.value,
                 "next_state": current_state.value,
@@ -179,6 +185,22 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
             return True  # User wants to book
         return False
     
+    @staticmethod
+    def _parse_bilingual_response(raw: str) -> tuple:
+        """Parse ---EN--- / ---SV--- blocks. Returns (response_en, response_sv)."""
+        if not raw or not isinstance(raw, str):
+            return (None, None)
+        en, sv = None, None
+        if "---EN---" in raw and "---SV---" in raw:
+            parts = raw.split("---EN---", 1)
+            if len(parts) == 2:
+                rest = parts[1].split("---SV---", 1)
+                en = (rest[0].strip() or None) if rest else None
+                sv = (rest[1].strip() or None) if len(rest) > 1 else None
+        if not en and not sv:
+            en = raw.strip() or None
+        return (en, sv)
+
     def _should_escalate(self, user_message: str, ai_response: str) -> bool:
         """Determine if conversation should be escalated to human"""
         # Simple heuristics - can be enhanced
@@ -192,10 +214,9 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
         
         return any(phrase.lower() in ai_response.lower() for phrase in uncertainty_phrases)
     
-    def get_welcome_message(self, customer_name: Optional[str] = None) -> str:
-        """Generate welcome message"""
-        from app.ai.prompts import WELCOME_MESSAGE
+    def get_welcome_message(self, language: str = "en", customer_name: Optional[str] = None) -> str:
+        """Generate welcome message in the given language."""
         if customer_name:
-            return f"Hi {customer_name}! " + WELCOME_MESSAGE.split("!")[1]
-        return WELCOME_MESSAGE
+            return t(language, "welcome_hi", name=customer_name)
+        return t(language, "welcome")
 

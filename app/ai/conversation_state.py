@@ -5,6 +5,8 @@ from enum import Enum
 from typing import Optional, Dict
 from datetime import datetime
 
+from app.config import settings
+
 
 class ConversationState(Enum):
     """Conversation state enumeration"""
@@ -38,8 +40,6 @@ class ConversationFlowManager:
     
     def get_state_prompt(self, state: ConversationState, customer_info: Dict) -> str:
         """Get AI prompt based on current conversation state"""
-        from app.config import settings
-        
         prompts = {
             ConversationState.WELCOME: f"""You just welcomed the customer. Now guide them to share their profile information (name, email, phone) so you can help them book their free trial.""",
             
@@ -70,8 +70,6 @@ class ConversationFlowManager:
     
     def get_proactive_message(self, state: ConversationState, customer_name: str) -> Optional[str]:
         """Get proactive message to guide conversation forward"""
-        from app.config import settings
-        
         if state == ConversationState.PROFILE_COMPLETE:
             return f"Perfect, {customer_name}! Now let's get you booked for your free {settings.free_trial_days}-day trial. When would you like to visit us?"
         

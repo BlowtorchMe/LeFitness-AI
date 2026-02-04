@@ -2,17 +2,22 @@
 Google Calendar webhook handler
 Receives push notifications when calendar events are created/updated
 """
+import json
+import traceback
+from datetime import datetime, timedelta
+from typing import Optional, Dict
+
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Dict
-from datetime import datetime, timedelta
-from app.database.database import get_db
-from app.services.lead_service import LeadService
-from app.services.booking_service import BookingService
-from app.integrations.messenger_api import MessengerAPI
+
+from app.config import settings
+from app.database.database import get_db, SessionLocal
 from app.integrations.google_calendar import GoogleCalendar
-from app.models.lead import LeadStatus
-import json
+from app.integrations.messenger_api import MessengerAPI
+from app.models.booking import Booking, AppointmentType, BookingStatus
+from app.models.lead import Lead, LeadStatus
+from app.services.booking_service import BookingService
+from app.services.lead_service import LeadService
 
 router = APIRouter()
 messenger_api = MessengerAPI()
@@ -54,7 +59,6 @@ async def handle_calendar_webhook(request: Request):
             return {"status": "ok", "message": "change processed"}
         except Exception as e:
             print(f"[CALENDAR WEBHOOK] Error processing changes: {e}")
-            import traceback
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
     
@@ -66,13 +70,8 @@ async def process_calendar_changes():
     """
     Process calendar changes - find new events and save all bookings to database
     """
-    from app.database.database import SessionLocal
-    from app.models.lead import Lead
-    from app.models.booking import Booking, AppointmentType, BookingStatus
-    from app.config import settings
-    
     global calendar
-    
+
     # Only process if calendar is configured
     if not calendar:
         if settings.google_calendar_id and settings.google_service_account:
@@ -81,7 +80,6 @@ async def process_calendar_changes():
                 print("[CALENDAR WEBHOOK] Calendar initialized successfully")
             except Exception as e:
                 print(f"[CALENDAR WEBHOOK] Failed to initialize calendar: {e}")
-                import traceback
                 traceback.print_exc()
                 return
         else:
@@ -172,7 +170,6 @@ async def process_calendar_changes():
                     pass
             
             # Create booking in database
-            from app.models.booking import AppointmentType
             booking = Booking(
                 lead_id=lead.id if lead else None,
                 customer_name=customer_name,
@@ -217,7 +214,6 @@ async def process_calendar_changes():
         
     except Exception as e:
         print(f"[CALENDAR WEBHOOK] Error processing calendar changes: {e}")
-        import traceback
         traceback.print_exc()
         db.rollback()
     finally:

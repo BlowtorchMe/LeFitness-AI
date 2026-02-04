@@ -187,6 +187,39 @@ Behavior:
 - When profile is complete, it sends a message with the raw `GOOGLE_APPOINTMENT_SCHEDULE_LINK` URL (no buttons).
 - Webhook-related behavior (Google Calendar) is not simulated in the console; that happens via the real calendar/webhook when deployed.
 
+## 5.5 Testing web chat only (no Meta)
+
+You can test the full chat flow using only the web chat page, without any Meta (Facebook/Instagram) setup.
+
+**Required in `.env`:**
+- `OPENAI_API_KEY` – for AI responses
+- `DATABASE_URL` – for leads and conversations
+
+**Optional:** `GYM_NAME`, `GOOGLE_APPOINTMENT_SCHEDULE_LINK` (for a real booking link in messages). Leave all Meta vars (`META_ACCESS_TOKEN`, etc.) empty.
+
+**Steps:**
+
+1. In `Fitness-Chatbot`, create `.env` with at least `OPENAI_API_KEY` and `DATABASE_URL`. No Meta or Google vars needed for web-only testing.
+
+2. Initialize the database (if not already):
+   ```bash
+   python -c "from app.database.database import init_db; init_db()"
+   ```
+
+3. Start the backend:
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+
+4. In another terminal, start the chat frontend:
+   ```bash
+   cd ../chat-app
+   npm install
+   npm run dev
+   ```
+
+5. Open http://localhost:5173 and click **Start chat**. The flow is: welcome → name, email, phone → booking link. All traffic uses `POST /api/chat`; no Meta APIs or webhooks are involved.
+
 ## 6. Meta Webhook Integration (Live)
 
 Once the backend is deployed to a public URL:
@@ -249,7 +282,12 @@ Do not start `uvicorn` yourself on Vercel; `app.main:app` is used as the serverl
 - `GET /` – health check
 - `GET /api/leads` – list leads
 - `GET /api/bookings` – list bookings
+- `POST /api/chat` – web chat (for chat page instead of Messenger/Instagram)
 - `POST /webhooks/meta` – Meta webhook handler
 - `GET /webhooks/meta` – Meta webhook verification
 - `POST /webhooks/calendar` – Google Calendar webhook handler
+
+### Web chat (`POST /api/chat`)
+
+Body: `{ "session_id": "optional", "message": "optional" }`. First request without `message` returns welcome + first profile question. Response: `{ "session_id": "...", "messages": ["..."] }`. Use the same `session_id` for the rest of the conversation. The companion React app is in `../chat-app` (see its README).
 

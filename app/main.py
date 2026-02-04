@@ -5,12 +5,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.webhooks import meta_webhook, calendar_webhook
-from app.api import leads, bookings
+from app.api import leads, bookings, chat
 from app.services.calendar_webhook_service import calendar_webhook_service
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import logging
+import uvicorn
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ app.include_router(meta_webhook.router, prefix="/webhooks/meta", tags=["webhooks
 app.include_router(calendar_webhook.router, prefix="/webhooks/calendar", tags=["webhooks"])
 app.include_router(leads.router, prefix="/api/leads", tags=["leads"])
 app.include_router(bookings.router, prefix="/api/bookings", tags=["bookings"])
+app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 
 
 @app.get("/")
@@ -97,6 +99,5 @@ async def health():
 
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
 

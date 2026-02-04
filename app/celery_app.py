@@ -1,9 +1,11 @@
 """
 Celery configuration for background tasks
 """
+from app.config import settings
+
 try:
     from celery import Celery
-    from app.config import settings
+    from app.tasks import reminder_tasks, followup_tasks
 
     celery_app = Celery(
         "lefitness",
@@ -18,9 +20,6 @@ try:
         timezone="UTC",
         enable_utc=True,
     )
-
-    # Import tasks
-    from app.tasks import reminder_tasks, followup_tasks
 except ImportError:
     # Celery not available (e.g., in serverless environment)
     celery_app = None

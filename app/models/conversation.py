@@ -17,7 +17,9 @@ class ConversationChannel(enum.Enum):
     """Conversation channel enumeration"""
     SMS = "sms"
     MESSENGER = "messenger"
+    INSTAGRAM = "instagram"
     WHATSAPP = "whatsapp"
+    WEB = "web"
 
 
 class Conversation(Base):
@@ -32,9 +34,11 @@ class Conversation(Base):
     phone_number = Column(String(20), nullable=True)
     messenger_id = Column(String(100), nullable=True)
     
-    # Message details
+    # Message details (message_text_en/sv for bilingual storage; add columns if missing)
     direction = Column(Enum(MessageDirection), nullable=False)
     message_text = Column(Text, nullable=False)
+    message_text_en = Column(Text, nullable=True)
+    message_text_sv = Column(Text, nullable=True)
     
     # AI processing
     intent = Column(String(50), nullable=True)

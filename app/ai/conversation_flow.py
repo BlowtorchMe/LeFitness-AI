@@ -1,16 +1,20 @@
 """
 Conversation flow orchestration - guides users through booking process
 """
+import urllib.parse
+from datetime import datetime, timedelta
 from typing import Dict, Optional
+
 from app.ai.conversation_state import ConversationState, ConversationFlowManager
+from app.config import settings
+from app.integrations.google_calendar import GoogleCalendar
 from app.integrations.messenger_api import MessengerAPI
+from app.models.booking import AppointmentType
+from app.models.conversation import ConversationChannel, MessageDirection
+from app.models.lead import LeadStatus
 from app.services.booking_service import BookingService
 from app.services.lead_service import LeadService
 from app.services.conversation_service import ConversationService
-from app.models.conversation import ConversationChannel, MessageDirection
-from datetime import datetime, timedelta
-from app.config import settings
-from app.integrations.google_calendar import GoogleCalendar
 
 
 class ConversationFlow:
@@ -69,8 +73,6 @@ class ConversationFlow:
     
     async def _recommend_booking(self, lead, sender_id: str, lead_service: LeadService) -> Dict:
         """Proactively recommend booking after profile complete - provide appointment schedule link"""
-        from app.config import settings
-        
         calendar_link = self._get_calendar_link(datetime.now())
         
         message = f"Perfect, {lead.name}! Now let's get you booked for your free {settings.free_trial_days}-day trial at {settings.gym_name}!\n\nYou'll get:\n✅ Full gym access\n✅ All equipment\n✅ Group training classes\n✅ Personal gym tour\n\nPlease book your appointment at a time that works best for you using this link:\n{calendar_link}\n\nOnce you've booked, I'll confirm everything for you!"
@@ -126,15 +128,12 @@ class ConversationFlow:
         Get Google Calendar Appointment Schedule booking page link
         This is the booking page where users can see available slots and book directly
         """
-        from app.config import settings
-        
         # If Appointment Schedule link is configured, use it (best option)
         if settings.google_appointment_schedule_link:
             return settings.google_appointment_schedule_link
         
         # Fallback: If we have a calendar ID, try to create a link to view the calendar
         if settings.google_calendar_id:
-            import urllib.parse
             calendar_id_encoded = urllib.parse.quote(settings.google_calendar_id, safe='')
             # Link to view the calendar (shows all events)
             return f"https://calendar.google.com/calendar/u/0/r?cid={calendar_id_encoded}"
@@ -185,8 +184,6 @@ class ConversationFlow:
     
     async def _create_booking(self, lead, sender_id: str, booking_service: BookingService, lead_service: LeadService) -> Dict:
         """Create the actual booking"""
-        from app.models.booking import AppointmentType
-        
         # Get proposed time from notes
         proposed_time_str = lead.notes.split(":")[1] if lead.notes and "proposed_booking:" in lead.notes else None
         
@@ -208,8 +205,6 @@ class ConversationFlow:
         )
         
         if result.get("success"):
-            # Update lead status
-            from app.models.lead import LeadStatus
             lead_service.update_lead_status(lead.id, LeadStatus.BOOKED)
             lead.conversation_state = ConversationState.BOOKING_CONFIRMED.value
             lead.notes = None
@@ -229,8 +224,6 @@ class ConversationFlow:
     
     async def _send_booking_confirmation(self, lead, sender_id: str) -> Dict:
         """Send booking confirmation message"""
-        from app.ai.prompts import BOOKING_CONFIRMATION
-        
         # Get booking details (would load from database)
         message = f"""🎉 Perfect! Your booking is confirmed!
 

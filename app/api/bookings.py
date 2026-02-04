@@ -48,9 +48,8 @@ async def get_booking(booking_id: int, db: Session = Depends(get_db)):
 @router.get("/available/slots")
 async def get_available_slots(date: str, db: Session = Depends(get_db)):
     """Get available booking slots for a date (format: YYYY-MM-DD)"""
-    from datetime import datetime as dt
     try:
-        date_obj = dt.strptime(date, "%Y-%m-%d")
+        date_obj = datetime.strptime(date, "%Y-%m-%d")
         booking_service = BookingService(db)
         slots = booking_service.get_available_slots(date_obj)
         return {"date": date, "slots": slots}

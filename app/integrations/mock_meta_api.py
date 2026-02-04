@@ -1,9 +1,11 @@
 """
 Mock Meta API for testing without real Facebook/Instagram accounts
 """
-from typing import Dict, Optional
 import json
 from datetime import datetime
+from typing import Dict, Optional
+
+from app.config import settings
 
 
 class MockMetaAPI:
@@ -17,8 +19,6 @@ class MockMetaAPI:
     
     def verify_webhook(self, mode: str, token: str, challenge: str):
         """Verify webhook - returns challenge string if verified, None otherwise"""
-        # In mock mode, also check against settings.meta_verify_token if available
-        from app.config import settings
         expected_token = settings.meta_verify_token or self.verify_token
         
         if mode == "subscribe" and token == expected_token:
