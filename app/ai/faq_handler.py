@@ -10,20 +10,29 @@ class FAQHandler:
     """Handles FAQ queries and answers"""
     
     def __init__(self):
-        # In-memory FAQ for now - will be replaced with database
+        # In-memory FAQ - keyword match injects this into the AI prompt
         self.faq_database = {
-            "opening hours": "We're open [to be configured]",
-            "hours": "We're open [to be configured]",
-            "price": "Our membership prices are [to be configured]",
-            "prices": "Our membership prices are [to be configured]",
-            "cost": "Our membership prices are [to be configured]",
-            "parking": "We have parking available [to be configured]",
-            "group training": "Our group training schedule is [to be configured]",
-            "pt": "Personal training setup is available [to be configured]",
-            "personal trainer": "Personal training setup is available [to be configured]",
-            "babies": "Rules for babies at the gym: [to be configured]",
-            "children": "Rules for children at the gym: [to be configured]",
-            "equipment": "We have [to be configured] equipment available"
+            "opening hours": "We are open 5:00–23:00. Staff present 10:00–19:00 (Mon–Thu), 10:00–17:00 (Fri), 10:00–15:00 (Sat–Sun). Members can enter digitally when no staff is present.",
+            "hours": "We are open 5:00–23:00. Staff present 10:00–19:00 (Mon–Thu), 10:00–17:00 (Fri), 10:00–15:00 (Sat–Sun). Members can enter digitally when no staff is present.",
+            "price": "Membership: 5990 SEK/year (1-year fixed), 6990 SEK/year (non-binding, 2 months notice), 599 SEK/month (1-year fixed), 699 SEK/month (non-binding, 2 months notice).",
+            "prices": "Membership: 5990 SEK/year (1-year fixed), 6990 SEK/year (non-binding, 2 months notice), 599 SEK/month (1-year fixed), 699 SEK/month (non-binding, 2 months notice).",
+            "cost": "Membership: 5990 SEK/year (1-year fixed), 6990 SEK/year (non-binding, 2 months notice), 599 SEK/month (1-year fixed), 699 SEK/month (non-binding, 2 months notice).",
+            "parking": "We have free parking on our private parking lots.",
+            "group training": "We offer Physical Fitness, Upper Body, Booty Builders, Yoga, and Taekwondo.",
+            "pt": "We offer personal training for individuals and in smaller groups.",
+            "personal trainer": "We offer personal training for individuals and in smaller groups.",
+            "babies": "Kids in a crib or buggy are welcome beside you while you train. Kids who can move around on their own are not allowed. Age limit at the gym is 18.",
+            "children": "Kids in a crib or buggy are welcome beside you while you train. Kids who can move around on their own are not allowed. Age limit at the gym is 18.",
+            "equipment": "We use equipment brands such as Gym80, Primal, Booty Builder, and more. We have towel service and lockers for rent, and in-house smoothies with protein, kreatin, and other supplements.",
+            "machines": "Our equipment includes brands like Gym80, Primal, Booty Builder, and more.",
+            "brands": "We use Gym80, Primal, Booty Builder, and other quality brands.",
+            "classes": "We offer Physical Fitness, Upper Body, Booty Builders, Yoga, and Taekwondo.",
+            "yoga": "We offer Yoga among our group classes.",
+            "smoothies": "We serve in-house smoothies with protein, kreatin, and other supplements and support all major nutrition brands.",
+            "nutrition": "We support all major nutrition brands and serve in-house smoothies with protein, kreatin, and other supplements.",
+            "towel": "We have towel service available.",
+            "lockers": "We have lockers for rent.",
+            "age": "The age limit at the gym is 18. Kids in a crib or buggy are welcome beside you; kids who can move on their own are not allowed.",
         }
     
     async def get_answer(self, question: str) -> Optional[str]:

@@ -64,11 +64,13 @@ class ChatHandler:
         
         messages.append({
             "role": "system",
-            "content": f"""Generate your reply in BOTH English and Swedish. Use exactly this format (nothing else):
+            "content": f"""You must reply with BOTH English and Swedish. Output exactly:
 ---EN---
-[Your full response in English here]
+[full reply in English]
 ---SV---
-[Your full response in Swedish here]
+[full reply in Swedish]
+
+No other format. Both blocks are required every time.
 
 Current conversation state: {current_state.value}
             
@@ -113,11 +115,12 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 model=settings.openai_model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=500
+                max_tokens=900
             )
-            
             raw = response.choices[0].message.content
             response_en, response_sv = self._parse_bilingual_response(raw)
+            if response_en and not response_sv:
+                response_sv = self._get_swedish_from_ai(response_en)
             single = response_en or response_sv or raw
             next_state = self._determine_next_state(current_state, intent, user_message, customer_info)
             return {
@@ -185,11 +188,30 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
             return True  # User wants to book
         return False
     
+    def _get_swedish_from_ai(self, text_en: str) -> Optional[str]:
+        if not text_en or not self.client:
+            return None
+        try:
+            r = self.client.chat.completions.create(
+                model=settings.openai_model,
+                messages=[
+                    {"role": "system", "content": "Reply with only the Swedish translation. No other text, no explanation."},
+                    {"role": "user", "content": f"Translate to Swedish:\n\n{text_en}"}
+                ],
+                temperature=0.3,
+                max_tokens=500
+            )
+            out = (r.choices[0].message.content or "").strip()
+            return out if out else None
+        except Exception:
+            return None
+
     @staticmethod
     def _parse_bilingual_response(raw: str) -> tuple:
         """Parse ---EN--- / ---SV--- blocks. Returns (response_en, response_sv)."""
         if not raw or not isinstance(raw, str):
             return (None, None)
+        raw = raw.strip()
         en, sv = None, None
         if "---EN---" in raw and "---SV---" in raw:
             parts = raw.split("---EN---", 1)
@@ -197,8 +219,8 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 rest = parts[1].split("---SV---", 1)
                 en = (rest[0].strip() or None) if rest else None
                 sv = (rest[1].strip() or None) if len(rest) > 1 else None
-        if not en and not sv:
-            en = raw.strip() or None
+        if not en and not sv and raw:
+            en = raw
         return (en, sv)
 
     def _should_escalate(self, user_message: str, ai_response: str) -> bool:

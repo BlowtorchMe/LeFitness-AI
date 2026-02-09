@@ -34,9 +34,8 @@ class Conversation(Base):
     phone_number = Column(String(20), nullable=True)
     messenger_id = Column(String(100), nullable=True)
     
-    # Message details (message_text_en/sv for bilingual storage; add columns if missing)
+    # Message details (bilingual only; lead.language holds current UI language)
     direction = Column(Enum(MessageDirection), nullable=False)
-    message_text = Column(Text, nullable=False)
     message_text_en = Column(Text, nullable=True)
     message_text_sv = Column(Text, nullable=True)
     

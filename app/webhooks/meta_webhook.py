@@ -219,7 +219,8 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
             lead_id=lead.id,
             channel=channel,
             direction=MessageDirection.INBOUND,
-            message_text=message_text,
+            message_text_en=message_text,
+            message_text_sv=message_text,
             messenger_id=sender_id
         )
         lead_service.db.commit()
@@ -272,7 +273,8 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
                 lead_id=lead.id,
                 channel=channel,
                 direction=MessageDirection.OUTBOUND,
-                message_text=calendar_msg,
+                message_text_en=calendar_msg,
+                message_text_sv=calendar_msg,
                 messenger_id=sender_id
             )
             lead.notes = "calendar_booking_pending_verification"
@@ -293,7 +295,8 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
                 lead_id=lead.id,
                 channel=channel,
                 direction=MessageDirection.OUTBOUND,
-                message_text=calendar_msg,
+                message_text_en=calendar_msg,
+                message_text_sv=calendar_msg,
                 messenger_id=sender_id
             )
             lead_service.db.commit()
@@ -391,7 +394,8 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
             lead_id=lead.id,
             channel=channel,
             direction=MessageDirection.OUTBOUND,
-            message_text=calendar_msg,
+            message_text_en=calendar_msg,
+            message_text_sv=calendar_msg,
             messenger_id=sender_id,
             ai_response=calendar_msg,
             intent="book"
@@ -419,22 +423,25 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
             lead_id=lead.id,
             channel=channel,
             direction=MessageDirection.OUTBOUND,
-            message_text=response_text,
+            message_text_en=response_text,
+            message_text_sv=response_text,
             messenger_id=sender_id,
             ai_response=response_text,
-            intent=intent
+            intent=intent,
+            faq_used="true" if ai_response.get("faq_used") else None
         )
     else:
         messenger_api.send_message(recipient_id=sender_id, message=response_text)
-        # Save outbound message
         conversation_service.save_message(
             lead_id=lead.id,
             channel=channel,
             direction=MessageDirection.OUTBOUND,
-            message_text=response_text,
+            message_text_en=response_text,
+            message_text_sv=response_text,
             messenger_id=sender_id,
             ai_response=response_text,
-            intent=intent
+            intent=intent,
+            faq_used="true" if ai_response.get("faq_used") else None
         )
     
     # Update lead
@@ -818,7 +825,8 @@ async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead
                 lead_id=lead.id,
                 channel=channel,
                 direction=MessageDirection.OUTBOUND,
-                message_text=profile_msg,
+                message_text_en=profile_msg,
+                message_text_sv=profile_msg,
                 messenger_id=sender_id,
                 intent="gather_profile_name"
             )
@@ -830,7 +838,8 @@ async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead
                 lead_id=lead.id,
                 channel=channel,
                 direction=MessageDirection.OUTBOUND,
-                message_text=profile_msg,
+                message_text_en=profile_msg,
+                message_text_sv=profile_msg,
                 messenger_id=sender_id,
                 intent="gather_profile_email"
             )
@@ -842,7 +851,8 @@ async def gather_profile_info(sender_id: str, channel: ConversationChannel, lead
                 lead_id=lead.id,
                 channel=channel,
                 direction=MessageDirection.OUTBOUND,
-                message_text=profile_msg,
+                message_text_en=profile_msg,
+                message_text_sv=profile_msg,
                 messenger_id=sender_id,
                 intent="gather_profile_phone"
             )

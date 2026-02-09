@@ -120,8 +120,8 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         if convs:
             history = []
             for c in convs:
-                te = getattr(c, "message_text_en", None) or c.message_text
-                ts = getattr(c, "message_text_sv", None)
+                te = c.message_text_en or c.message_text_sv
+                ts = c.message_text_sv
                 history.append(ChatMessageHistory(
                     role="user" if c.direction == MessageDirection.INBOUND else "bot",
                     text=te,
@@ -138,7 +138,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             lead_id=lead.id,
             channel=ConversationChannel.WEB,
             direction=MessageDirection.OUTBOUND,
-            message_text=welcome,
             message_text_en=welcome_en,
             message_text_sv=welcome_sv,
             messenger_id=sender_id,
@@ -151,7 +150,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 lead_id=lead.id,
                 channel=ConversationChannel.WEB,
                 direction=MessageDirection.OUTBOUND,
-                message_text=prompt,
                 message_text_en=prompt_en,
                 message_text_sv=prompt_sv,
                 messenger_id=sender_id,
@@ -167,7 +165,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 lead_id=lead.id,
                 channel=ConversationChannel.WEB,
                 direction=MessageDirection.OUTBOUND,
-                message_text=responses[-1],
                 message_text_en=book_en,
                 message_text_sv=book_sv,
                 messenger_id=sender_id,
@@ -183,7 +180,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         lead_id=lead.id,
         channel=ConversationChannel.WEB,
         direction=MessageDirection.INBOUND,
-        message_text=message_text,
         message_text_en=user_en,
         message_text_sv=user_sv,
         messenger_id=sender_id,
@@ -200,7 +196,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 lead_id=lead.id,
                 channel=ConversationChannel.WEB,
                 direction=MessageDirection.OUTBOUND,
-                message_text=prompt,
                 message_text_en=prompt_en,
                 message_text_sv=prompt_sv,
                 messenger_id=sender_id,
@@ -216,7 +211,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 lead_id=lead.id,
                 channel=ConversationChannel.WEB,
                 direction=MessageDirection.OUTBOUND,
-                message_text=responses[-1],
                 message_text_en=book_en,
                 message_text_sv=book_sv,
                 messenger_id=sender_id,
@@ -251,7 +245,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 lead_id=lead.id,
                 channel=ConversationChannel.WEB,
                 direction=MessageDirection.OUTBOUND,
-                message_text=prompt,
                 message_text_en=prompt_en,
                 message_text_sv=prompt_sv,
                 messenger_id=sender_id,
@@ -266,7 +259,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 lead_id=lead.id,
                 channel=ConversationChannel.WEB,
                 direction=MessageDirection.OUTBOUND,
-                message_text=responses[-1],
                 message_text_en=book_en,
                 message_text_sv=book_sv,
                 messenger_id=sender_id,
@@ -285,7 +277,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             lead_id=lead.id,
             channel=ConversationChannel.WEB,
             direction=MessageDirection.OUTBOUND,
-            message_text=responses[-1],
             message_text_en=confirm_en,
             message_text_sv=confirm_sv,
             messenger_id=sender_id,
@@ -330,23 +321,28 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         else:
             resp_en = ai_response.get("response_en") or ai_response.get("response", "")
             resp_sv = ai_response.get("response_sv")
-        response_text = (resp_sv if lang_lead == "sv" else resp_en) or ai_response.get("response", "")
+        response_text = (resp_sv if lang_lead == "sv" else resp_en) or resp_en or ai_response.get("response", "")
         responses.append(response_text)
         conversation_service.save_message(
             lead_id=lead.id,
             channel=ConversationChannel.WEB,
             direction=MessageDirection.OUTBOUND,
-            message_text=response_text,
             message_text_en=resp_en,
             message_text_sv=resp_sv,
             messenger_id=sender_id,
+            intent=ai_response.get("intent"),
+            ai_response=response_text,
+            faq_used="true" if ai_response.get("faq_used") else None,
         )
         lead_service.db.commit()
         return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")
 
     resp_en = ai_response.get("response_en") or ai_response.get("response", "")
     resp_sv = ai_response.get("response_sv")
-    response_text = (resp_sv if lang_lead == "sv" else resp_en) or ai_response.get("response", "")
+    if lang_lead == "sv":
+        response_text = resp_sv or resp_en or ai_response.get("response", "")
+    else:
+        response_text = resp_en or ai_response.get("response", "")
     if ai_response.get("next_state") and ai_response["next_state"] != current_state:
         lead.conversation_state = ai_response["next_state"]
         lead_service.db.commit()
@@ -370,12 +366,12 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         lead_id=lead.id,
         channel=ConversationChannel.WEB,
         direction=MessageDirection.OUTBOUND,
-        message_text=response_text,
         message_text_en=resp_en,
         message_text_sv=resp_sv,
         messenger_id=sender_id,
-        ai_response=response_text,
         intent=ai_response.get("intent"),
+        ai_response=response_text,
+        faq_used="true" if ai_response.get("faq_used") else None,
     )
     lead_service.increment_message_count(lead.id)
     lead_service.db.commit()

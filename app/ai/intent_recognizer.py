@@ -18,8 +18,9 @@ class IntentRecognizer:
             r"can't make it", r"won't be able"
         ],
         "question": [
-            r"what", r"when", r"where", r"how", r"why", r"hours",
-            r"price", r"cost", r"parking", r"equipment", r"rules"
+            r"what", r"when", r"where", r"how", r"why", r"can\s+i", r"can\s+we", r"could\s+i",
+            r"hours", r"price", r"cost", r"parking", r"equipment", r"rules",
+            r"kid", r"child", r"children", r"bring"
         ],
         "greeting": [
             r"hi", r"hello", r"hey", r"good morning", r"good afternoon"

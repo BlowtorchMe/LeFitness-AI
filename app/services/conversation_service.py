@@ -18,28 +18,22 @@ class ConversationService:
         lead_id: Optional[int],
         channel: ConversationChannel,
         direction: MessageDirection,
-        message_text: str,
+        message_text_en: Optional[str] = None,
+        message_text_sv: Optional[str] = None,
         messenger_id: Optional[str] = None,
         phone_number: Optional[str] = None,
         intent: Optional[str] = None,
         ai_response: Optional[str] = None,
         faq_used: Optional[str] = None,
         needs_human: bool = False,
-        message_text_en: Optional[str] = None,
-        message_text_sv: Optional[str] = None,
     ) -> Conversation:
-        """
-        Save a conversation message. Use message_text_en/message_text_sv when both languages are stored.
-        """
-        text_en = message_text_en if message_text_en is not None else message_text
-        text_sv = message_text_sv
+        """Save a conversation message. At least one of message_text_en, message_text_sv required."""
         conversation = Conversation(
             lead_id=lead_id,
             channel=channel,
             direction=direction,
-            message_text=text_en,
-            message_text_en=text_en,
-            message_text_sv=text_sv,
+            message_text_en=message_text_en,
+            message_text_sv=message_text_sv,
             messenger_id=messenger_id,
             phone_number=phone_number,
             intent=intent,
@@ -109,7 +103,7 @@ class ConversationService:
             elif conv.message_text_en:
                 content = conv.message_text_en
             else:
-                content = conv.message_text
+                content = conv.message_text_sv or conv.message_text_en or ""
             if conv.direction == MessageDirection.INBOUND:
                 history.append({"role": "user", "content": content})
             elif conv.direction == MessageDirection.OUTBOUND:
