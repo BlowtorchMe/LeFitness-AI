@@ -6,12 +6,12 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database.database import get_db
+from app.database.database import get_db, SessionLocal
 from app.models.conversation import ConversationChannel, MessageDirection, Conversation
 from app.services.lead_service import LeadService
 from app.services.conversation_service import ConversationService
@@ -22,6 +22,22 @@ from app.ai.user_translate import translate_text as translate_user_message
 
 router = APIRouter()
 chat_handler = ChatHandler()
+
+
+def _fill_sv_background(conversation_id: int, text_en: str) -> None:
+    try:
+        db = SessionLocal()
+        try:
+            sv = chat_handler._get_swedish_from_ai(text_en)
+            if sv:
+                conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+                if conv:
+                    conv.message_text_sv = sv
+                    db.commit()
+        finally:
+            db.close()
+    except Exception:
+        pass
 
 
 def _get_calendar_link() -> str:
@@ -75,7 +91,7 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/", response_model=ChatResponse)
-async def chat(request: ChatRequest, db: Session = Depends(get_db)):
+async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     Web chat endpoint. Same flow as Messenger/Instagram: welcome, name, email, phone, then booking link.
     """
@@ -141,6 +157,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             message_text_en=welcome_en,
             message_text_sv=welcome_sv,
             messenger_id=sender_id,
+            commit=False,
         )
         status, prompt_en, prompt_sv = _next_profile_prompt(lead)
         if status != "complete":
@@ -153,6 +170,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 message_text_en=prompt_en,
                 message_text_sv=prompt_sv,
                 messenger_id=sender_id,
+                commit=False,
             )
             lead.notes = f"profile_status:{status}"
             lead.conversation_state = "gathering_profile"
@@ -168,14 +186,18 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 message_text_en=book_en,
                 message_text_sv=book_sv,
                 messenger_id=sender_id,
+                commit=False,
             )
             lead.conversation_state = "recommending_booking"
         lead_service.db.commit()
         return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")
 
     lang_lead = _lang(lead)
-    user_en = message_text if lang_lead == "en" else (translate_user_message(message_text, "sv", "en") or message_text)
-    user_sv = message_text if lang_lead == "sv" else (translate_user_message(message_text, "en", "sv") or message_text)
+    if lead.notes and lead.notes.startswith("profile_status:"):
+        user_en = user_sv = message_text
+    else:
+        user_en = message_text if lang_lead == "en" else (translate_user_message(message_text, "sv", "en") or message_text)
+        user_sv = message_text if lang_lead == "sv" else (translate_user_message(message_text, "en", "sv") or message_text)
     conversation_service.save_message(
         lead_id=lead.id,
         channel=ConversationChannel.WEB,
@@ -183,9 +205,9 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         message_text_en=user_en,
         message_text_sv=user_sv,
         messenger_id=sender_id,
+        commit=False,
     )
-    lead_service.increment_message_count(lead.id)
-    lead_service.db.commit()
+    lead_service.increment_message_count(lead.id, commit=False)
 
     if not lead.conversation_state or lead.conversation_state == "welcome":
         status, prompt_en, prompt_sv = _next_profile_prompt(lead)
@@ -199,6 +221,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 message_text_en=prompt_en,
                 message_text_sv=prompt_sv,
                 messenger_id=sender_id,
+                commit=False,
             )
             lead.notes = f"profile_status:{status}"
             lead.conversation_state = "gathering_profile"
@@ -214,6 +237,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 message_text_en=book_en,
                 message_text_sv=book_sv,
                 messenger_id=sender_id,
+                commit=False,
             )
             lead.conversation_state = "recommending_booking"
         lead_service.db.commit()
@@ -221,24 +245,18 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     if lead.notes and lead.notes.startswith("profile_status:"):
         status = lead.notes.split(":")[1]
-        if status == "waiting_for_name":
-            if message_text.strip():
-                lead.name = message_text.strip()
-                lead_service.db.commit()
-        elif status == "waiting_for_email":
-            if "@" in message_text:
-                lead.email = message_text.strip()
-                lead_service.db.commit()
+        if status == "waiting_for_name" and message_text.strip():
+            lead.name = message_text.strip()
+        elif status == "waiting_for_email" and "@" in message_text:
+            lead.email = message_text.strip()
         elif status == "waiting_for_phone":
             phone = message_text.strip().replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
             if phone and (phone.isdigit() or phone.startswith("+")):
                 lead.phone = phone
-                lead_service.db.commit()
 
         next_status, prompt_en, prompt_sv = _next_profile_prompt(lead)
         if next_status != "complete":
             lead.notes = f"profile_status:{next_status}"
-            lead_service.db.commit()
             prompt = prompt_sv if lang_lead == "sv" else prompt_en
             responses.append(prompt)
             conversation_service.save_message(
@@ -248,11 +266,11 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 message_text_en=prompt_en,
                 message_text_sv=prompt_sv,
                 messenger_id=sender_id,
+                commit=False,
             )
         else:
             lead.conversation_state = "profile_complete"
             lead.notes = "waiting_for_calendar_booking"
-            lead_service.db.commit()
             book_en, book_sv = _recommend_booking_both(lead)
             responses.append(book_sv if lang_lead == "sv" else book_en)
             conversation_service.save_message(
@@ -262,6 +280,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 message_text_en=book_en,
                 message_text_sv=book_sv,
                 messenger_id=sender_id,
+                commit=False,
             )
             lead.conversation_state = "recommending_booking"
         lead_service.db.commit()
@@ -280,6 +299,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             message_text_en=confirm_en,
             message_text_sv=confirm_sv,
             messenger_id=sender_id,
+            commit=False,
         )
         lead.notes = "calendar_booking_pending_verification"
         lead_service.db.commit()
@@ -310,20 +330,18 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         if current_state == "profile_complete":
             lead.conversation_state = "recommending_booking"
             lead.notes = "waiting_for_calendar_booking"
-            lead_service.db.commit()
             resp_en, resp_sv = _recommend_booking_both(lead)
         elif intent == "book" and current_state == "recommending_booking":
             resp_en = t("en", "book_link_once", link=link)
             resp_sv = t("sv", "book_link_once", link=link)
             lead.notes = "waiting_for_calendar_booking"
             lead.conversation_state = "recommending_booking"
-            lead_service.db.commit()
         else:
             resp_en = ai_response.get("response_en") or ai_response.get("response", "")
             resp_sv = ai_response.get("response_sv")
         response_text = (resp_sv if lang_lead == "sv" else resp_en) or resp_en or ai_response.get("response", "")
         responses.append(response_text)
-        conversation_service.save_message(
+        conv = conversation_service.save_message(
             lead_id=lead.id,
             channel=ConversationChannel.WEB,
             direction=MessageDirection.OUTBOUND,
@@ -334,6 +352,8 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             ai_response=response_text,
             faq_used="true" if ai_response.get("faq_used") else None,
         )
+        if resp_en and not resp_sv:
+            background_tasks.add_task(_fill_sv_background, conv.id, resp_en)
         lead_service.db.commit()
         return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")
 
@@ -345,7 +365,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         response_text = resp_en or ai_response.get("response", "")
     if ai_response.get("next_state") and ai_response["next_state"] != current_state:
         lead.conversation_state = ai_response["next_state"]
-        lead_service.db.commit()
 
     calendar_keywords = ["calendar", "available", "time slot", "schedule", "appointment", "book", "booking"]
     if any(k in message_text.lower() for k in calendar_keywords) and current_state in [
@@ -359,10 +378,9 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         response_text = resp_sv if lang_lead == "sv" else resp_en
         lead.notes = "waiting_for_calendar_booking"
         lead.conversation_state = "recommending_booking"
-        lead_service.db.commit()
 
     responses.append(response_text)
-    conversation_service.save_message(
+    conv = conversation_service.save_message(
         lead_id=lead.id,
         channel=ConversationChannel.WEB,
         direction=MessageDirection.OUTBOUND,
@@ -372,8 +390,11 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         intent=ai_response.get("intent"),
         ai_response=response_text,
         faq_used="true" if ai_response.get("faq_used") else None,
+        commit=False,
     )
-    lead_service.increment_message_count(lead.id)
+    if resp_en and not resp_sv:
+        background_tasks.add_task(_fill_sv_background, conv.id, resp_en)
+    lead_service.increment_message_count(lead.id, commit=False)
     lead_service.db.commit()
 
     return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")

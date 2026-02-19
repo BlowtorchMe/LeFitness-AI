@@ -26,8 +26,9 @@ class ConversationService:
         ai_response: Optional[str] = None,
         faq_used: Optional[str] = None,
         needs_human: bool = False,
+        commit: bool = True,
     ) -> Conversation:
-        """Save a conversation message. At least one of message_text_en, message_text_sv required."""
+        """Save a conversation message. commit=False only adds and flushes (caller commits)."""
         conversation = Conversation(
             lead_id=lead_id,
             channel=channel,
@@ -42,11 +43,13 @@ class ConversationService:
             needs_human=needs_human,
             created_at=datetime.utcnow()
         )
-        
         self.db.add(conversation)
-        self.db.commit()
-        self.db.refresh(conversation)
-        
+        if commit:
+            self.db.commit()
+            self.db.refresh(conversation)
+        else:
+            self.db.flush()
+            self.db.refresh(conversation)
         return conversation
     
     def get_conversation_history(
@@ -86,7 +89,7 @@ class ConversationService:
         lead_id: Optional[int] = None,
         messenger_id: Optional[str] = None,
         phone_number: Optional[str] = None,
-        limit: int = 20,
+        limit: int = 12,
         lang: str = "en",
     ) -> list:
         """Get conversation history for AI. lang in ('en','sv') picks which text to use."""

@@ -107,13 +107,14 @@ class LeadService:
         
         return query.all()
     
-    def increment_message_count(self, lead_id: int) -> Optional[Lead]:
-        """Increment message count for a lead"""
+    def increment_message_count(self, lead_id: int, commit: bool = True) -> Optional[Lead]:
+        """Increment message count for a lead. commit=False leaves persisting to caller."""
         lead = self.get_lead(lead_id)
         if lead:
             lead.message_count += 1
             lead.last_contact = datetime.utcnow()
-            self.db.commit()
-            self.db.refresh(lead)
+            if commit:
+                self.db.commit()
+                self.db.refresh(lead)
         return lead
 

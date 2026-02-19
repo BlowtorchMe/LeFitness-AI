@@ -115,12 +115,10 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 model=settings.openai_model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=900
+                max_tokens=600
             )
             raw = response.choices[0].message.content
             response_en, response_sv = self._parse_bilingual_response(raw)
-            if response_en and not response_sv:
-                response_sv = self._get_swedish_from_ai(response_en)
             single = response_en or response_sv or raw
             next_state = self._determine_next_state(current_state, intent, user_message, customer_info)
             return {
