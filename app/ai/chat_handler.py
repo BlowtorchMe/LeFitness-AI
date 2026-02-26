@@ -84,14 +84,27 @@ IMPORTANT: You are actively leading this conversation. Your goal is to guide the
 5. Confirm booking
 6. Send confirmation
 
-Be proactive! Don't just answer questions - guide them toward booking. If they ask questions, answer briefly then guide back to booking."""
+Be proactive! Don't just answer questions - guide them toward booking. If they ask questions, answer briefly then guide back to booking.
+            
+IMPORTANT URL RULE:
+if the FAQ contains a URL (for example a video link), you MUST include that exact URL in your reply without modifying or removing it.
+ """
         })
-        
+
         # Add FAQ context
         if faq_answer:
             messages.append({
                 "role": "system",
-                "content": f"FAQ Context: {FAQ_CONTEXT}\n\nRelevant FAQ: {faq_answer}"
+                "content": f"""
+        FAQ Context:
+        {FAQ_CONTEXT}
+
+        Relevant FAQ:
+        {faq_answer}
+
+        IMPORTANT:
+        If the FAQ contains a URL (for example a video link), you MUST include that exact URL in your reply without modifying or removing it.
+        """
             })
         
         # Add customer info if available

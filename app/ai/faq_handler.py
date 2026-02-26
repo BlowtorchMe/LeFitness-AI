@@ -33,6 +33,9 @@ class FAQHandler:
             "towel": "We have towel service available.",
             "lockers": "We have lockers for rent.",
             "age": "The age limit at the gym is 18. Kids in a crib or buggy are welcome beside you; kids who can move on their own are not allowed.",
+            "squatasimprover": "SquatAsImprover trains the glutes and hamstrings. Start light, keep your chest up, and push through your heels. Video: https://www.youtube.com/watch?v=wgfSDrqYMJ4",
+            "squat as improver": "SquatAsImprover trains the glutes and hamstrings. Start light, keep your chest up, and push through your heels. Video: https://www.youtube.com/watch?v=wgfSDrqYMJ4",
+            "squat improver": "SquatAsImprover trains the glutes and hamstrings. Start light, keep your chest up, and push through your heels. Video: https://www.youtube.com/watch?v=wgfSDrqYMJ4",
         }
     
     async def get_answer(self, question: str) -> Optional[str]:
