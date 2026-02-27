@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4"
+    openai_embedding_model: str = "text-embedding-3-small"
     
     # META/Facebook (Optional in test mode)
     meta_app_id: Optional[str] = None

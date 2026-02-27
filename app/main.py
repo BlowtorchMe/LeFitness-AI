@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.webhooks import meta_webhook, calendar_webhook
-from app.api import leads, bookings, chat
+from app.api import leads, bookings, chat, faq
 from app.services.calendar_webhook_service import calendar_webhook_service
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -80,6 +80,7 @@ app.include_router(calendar_webhook.router, prefix="/webhooks/calendar", tags=["
 app.include_router(leads.router, prefix="/api/leads", tags=["leads"])
 app.include_router(bookings.router, prefix="/api/bookings", tags=["bookings"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+app.include_router(faq.router, prefix="/api/faq", tags=["faq"])
 
 
 @app.get("/")

@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from app.config import settings
 from app.database.base import Base
-from app.models import lead, booking, conversation
+from app.models import lead, booking, conversation, faq
 
 # Create database engine (PostgreSQL)
 # pool_pre_ping: check connection before use to avoid "SSL connection closed" on stale connections
@@ -21,11 +21,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db():
-    """Drop and recreate all tables and (PostgreSQL) enum types. Schema includes leads.language, conversations.message_text_en / message_text_sv."""
+    """Drop and recreate all tables and (PostgreSQL) enum types. Ensures pgvector extension for FAQ indexer."""
     with engine.connect() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         conn.execute(text("DROP TABLE IF EXISTS conversations CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS bookings CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS leads CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS faqs CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS conversationchannel CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS messagedirection CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS leadstatus CASCADE"))

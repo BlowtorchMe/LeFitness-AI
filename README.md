@@ -6,9 +6,10 @@ This README focuses on how to run it, configure it, and connect Meta and Google 
 ## Tech Stack
 
 - **Backend**: FastAPI (Python)
-- **Database**: PostgreSQL (Neon as cloud DB)
+- **Database**: PostgreSQL (Neon as cloud DB); pgvector for FAQ embeddings
 - **Deployment**: Vercel (serverless)
-- **AI**: OpenAI
+- **AI**: OpenAI (chat + FAQ embeddings via Haystack)
+- **FAQ**: DB table `faqs` + pgvector RAG (embed query → retrieve top answer)
 - **Integrations**:
   - Meta (Facebook/Instagram) Graph API
   - Google Calendar (service account + appointment schedule link)
@@ -27,22 +28,22 @@ Copy the example file and edit:
 
 ```bash
 # Windows PowerShell
-Copy-Item env.example .env
+Copy-Item .env.example .env
 
 # Linux/Mac
-cp env.example .env
+cp .env.example .env
 ```
 
 ### 2.1 Core settings
 
-See `env.example` for the full list of variables.
+See `.env.example` for the full list of variables.
 Set at least:
 
 - `OPENAI_API_KEY`
 - `DATABASE_URL` (Neon connection string)
 - Basic gym info (`GYM_NAME`, `GYM_EMAIL`, etc.)
 
-For local testing with console and mock Meta, set:
+For local testing with mock Meta, set:
 
 - `USE_MOCK_APIS=true`
 - `TEST_MODE=true`
@@ -146,7 +147,7 @@ DATABASE_URL=postgresql://USER:PASSWORD@ep-example-123456.neon.tech/neondb
 python -c "from app.database.database import init_db; init_db()"
 ```
 
-This creates the required tables (`leads`, `bookings`, `conversations`) using the shared SQLAlchemy `Base`.
+This creates the required tables (`leads`, `bookings`, `conversations`, `faqs`) and enables the `vector` extension for FAQ embeddings.
 
 ## 4. Running Locally
 
@@ -162,32 +163,19 @@ Health check:
 API docs:
 - `http://localhost:8000/docs`
 
-## 5. Console Chatbot Tester
+### 4.5 FAQ (database + RAG)
 
-You can test the full flow (welcome → profile → booking link) without Meta:
+FAQs live in the `faqs` table and are searched via pgvector. Chat uses FAQ first, then the general AI prompt.
+
+**Seed FAQs:** Import `faq_seed.json` (project root) via the FAQ admin UI or `POST /api/faq/import` with the JSON array; use `?reindex=true` to run the indexer after import.
+
+**Reindex:** Use the "Reindex" button in the FAQ admin UI, or `POST /api/faq/reindex`, or run:
 
 ```bash
-python test_chatbot_console.py
+python -m app.faq_indexer
 ```
 
-Make sure in `.env` you have:
-
-```env
-USE_MOCK_APIS=true
-TEST_MODE=true
-```
-
-Console commands:
-- `/new` – start as a new user (new conversation)
-- `/user` – show current user ID
-- `/quit` – exit
-
-Behavior:
-- After welcome, the bot asks for name, email, and phone.
-- When profile is complete, it sends a message with the raw `GOOGLE_APPOINTMENT_SCHEDULE_LINK` URL (no buttons).
-- Webhook-related behavior (Google Calendar) is not simulated in the console; that happens via the real calendar/webhook when deployed.
-
-## 5.5 Testing web chat only (no Meta)
+## 5. Testing web chat (no Meta)
 
 You can test the full chat flow using only the web chat page, without any Meta (Facebook/Instagram) setup.
 
@@ -211,9 +199,9 @@ You can test the full chat flow using only the web chat page, without any Meta (
    uvicorn app.main:app --reload
    ```
 
-4. In another terminal, start the chat frontend:
+4. In another terminal, start the chat frontend (e.g. from the `Fitness-Chatbot-UI` sibling project):
    ```bash
-   cd ../chat-app
+   cd ../Fitness-Chatbot-UI
    npm install
    npm run dev
    ```
@@ -239,7 +227,7 @@ TEST_MODE=false
 
 3. Connect the page to the app so that messages from users are delivered to this backend.
 
-The conversation flow is the same as the console:
+The conversation flow matches the web chat:
 - Welcome message
 - Profile gathering (name, email, phone) using plain text prompts
 - Booking recommendation with a plain text appointment schedule URL
@@ -283,11 +271,19 @@ Do not start `uvicorn` yourself on Vercel; `app.main:app` is used as the serverl
 - `GET /api/leads` – list leads
 - `GET /api/bookings` – list bookings
 - `POST /api/chat` – web chat (for chat page instead of Messenger/Instagram)
+- **FAQ**
+  - `GET /api/faq` – list FAQs (paginated; query: `page`, `size`)
+  - `GET /api/faq/{id}` – get one FAQ
+  - `POST /api/faq` – add one FAQ
+  - `PUT /api/faq/{id}` – update FAQ
+  - `DELETE /api/faq/{id}` – delete FAQ
+  - `POST /api/faq/import` – import FAQs from JSON array (optional `?reindex=true`)
+  - `POST /api/faq/reindex` – run FAQ indexer (DB → pgvector)
 - `POST /webhooks/meta` – Meta webhook handler
 - `GET /webhooks/meta` – Meta webhook verification
 - `POST /webhooks/calendar` – Google Calendar webhook handler
 
 ### Web chat (`POST /api/chat`)
 
-Body: `{ "session_id": "optional", "message": "optional" }`. First request without `message` returns welcome + first profile question. Response: `{ "session_id": "...", "messages": ["..."] }`. Use the same `session_id` for the rest of the conversation. The companion React app is in `../chat-app` (see its README).
+Body: `{ "session_id": "optional", "message": "optional" }`. First request without `message` returns welcome + first profile question. Response: `{ "session_id": "...", "messages": ["..."] }`. Use the same `session_id` for the rest of the conversation. The companion React app is in the `Fitness-Chatbot-UI` project (sibling directory).
 

@@ -4,7 +4,10 @@ pydantic==2.10.0
 pydantic-settings==2.6.0
 
 # AI/LLM
-openai==1.54.0
+# Let haystack-ai choose a compatible OpenAI client (needs >=1.99.2)
+openai>=1.99.2
+haystack-ai>=2.0.0
+pgvector-haystack>=3.0.0
 
 # Database
 sqlalchemy==2.0.36
