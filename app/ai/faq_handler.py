@@ -43,7 +43,17 @@ def _retrieve_answer_sync(question: str) -> Optional[str]:
         docs = result.get("documents") or []
         if not docs:
             return None
-        return docs[0].meta.get("answer")
+        meta = docs[0].meta or {}
+        answer = (meta.get("answer") or "").strip()
+        video = (meta.get("video_link") or "").strip()
+
+        if not answer:
+            return None
+
+        if video and video not in answer:
+            return f"{answer}\n\nVideo: {video}"
+
+        return answer
     except Exception:
         return None
 
