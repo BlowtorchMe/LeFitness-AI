@@ -22,8 +22,8 @@ class ChatHandler:
                 self.client = openai.OpenAI(api_key=settings.openai_api_key)
             except Exception:
                 pass  # Will fail gracefully on first API call
-        self.faq_handler = FAQHandler()
-        self.intent_recognizer = IntentRecognizer()
+        self.faq_handler = FAQHandler() # söker i pgvector-FAQ
+        self.intent_recognizer = IntentRecognizer() # försöker förstå intent
         self.flow_manager = ConversationFlowManager()
     
     async def process_message(

@@ -73,7 +73,7 @@ async def import_faqs(
         reindex_error=reindex_error,
     )
 
-
+ # - läser FAQ-tabellen i DB sen skapas embeddings som sen skriver till pgvector
 @router.post("/reindex", response_model=ReindexResponse)
 async def reindex_faqs():
     """Run FAQ indexer (embed FAQs from DB into pgvector). For admin use."""
@@ -89,9 +89,9 @@ async def reindex_faqs():
 async def create_faq(body: FAQSchema, db: Session = Depends(get_db)):
     """Add one FAQ. Example for admin form (add one by one)."""
     faq = FAQ(question=body.question, answer=body.answer, video_link=body.video_link)
-    db.add(faq)
-    db.commit()
-    db.refresh(faq)
+    db.add(faq) #lägger till i faq
+    db.commit() #sparar i DB
+    db.refresh(faq) #laddar om så att de som lagts till får ett id
     return faq.to_record()
 
 
@@ -118,7 +118,7 @@ async def list_faqs(
         size=size,
     )
 
-
+#validerar så att de faq_id är större än 1 om den inte är det skriver den ut ett HTTPException
 def _validate_faq_id(faq_id: int) -> None:
     if faq_id < 1:
         raise HTTPException(status_code=422, detail="faq_id must be a positive integer")

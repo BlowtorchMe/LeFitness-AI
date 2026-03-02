@@ -25,15 +25,17 @@ def _retrieve_answer_sync(question: str) -> Optional[str]:
     if not settings.openai_api_key:
         return None
     try:
-        store = PgvectorDocumentStore(
+        store = PgvectorDocumentStore(  # Öppnar samma pgvector store som indexern skrev till
             recreate_table=False,
             search_strategy="hnsw",
             embedding_dimension=EMBEDDING_DIMENSION,
         )
+        # Gör embedding av frågan
         embedder = OpenAITextEmbedder(
             api_key=Secret.from_token(settings.openai_api_key),
             model=settings.openai_embedding_model,
         )
+        #Söker efter närmsta matchningen och ger bara ett svar tillbaka
         retriever = PgvectorEmbeddingRetriever(document_store=store)
         out = embedder.run(text=question)
         embedding = out.get("embedding")

@@ -95,7 +95,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
     """
     Web chat endpoint. Same flow as Messenger/Instagram: welcome, name, email, phone, then booking link.
     """
-    session_id = request.session_id or uuid.uuid4().hex
+    session_id = request.session_id or uuid.uuid4().hex #kommer ihåg användaren
     sender_id = session_id
     message_text = (request.message or "").strip()
     requested_lang = (request.language or "en").strip().lower()
@@ -105,9 +105,9 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
 
     lead_service = LeadService(db)
     conversation_service = ConversationService(db)
-    lead = lead_service.get_lead_by_messenger_id(sender_id)
+    lead = lead_service.get_lead_by_messenger_id(sender_id) #kunden som identifieras via messenger_id = session_id
 
-    if not lead:
+    if not lead: #om det är en ny användare skapas en ny lead
         lead = lead_service.create_lead(
             name="Customer",
             messenger_id=sender_id,
@@ -119,7 +119,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         lead.language = requested_lang
         lead_service.db.commit()
     else:
-        if lead.language != requested_lang:
+        if lead.language != requested_lang: #om användaren byter språk så uppdateras det
             lead.language = requested_lang
             lead_service.db.commit()
 
@@ -133,7 +133,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             .order_by(Conversation.created_at.asc())
             .all()
         )
-        if convs:
+        if convs: # om det finns en historik så retuneras den
             history = []
             for c in convs:
                 te = c.message_text_en or c.message_text_sv
@@ -146,6 +146,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
                 ))
             return ChatResponse(session_id=session_id, messages=[], history=history, language=lead.language or "en")
 
+        #om det inte finns någon historik så skapas en ny chat med välkomstmeddelande
         welcome_en = chat_handler.get_welcome_message(language="en")
         welcome_sv = chat_handler.get_welcome_message(language="sv")
         welcome = welcome_sv if _lang(lead) == "sv" else welcome_en
@@ -193,9 +194,10 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")
 
     lang_lead = _lang(lead)
-    if lead.notes and lead.notes.startswith("profile_status:"):
+    if lead.notes and lead.notes.startswith("profile_status:"): #sparar exakt det som user skrev (utan att översätta)
         user_en = user_sv = message_text
     else:
+        #annars översätt och spara både på en o sv i db
         user_en = message_text if lang_lead == "en" else (translate_user_message(message_text, "sv", "en") or message_text)
         user_sv = message_text if lang_lead == "sv" else (translate_user_message(message_text, "en", "sv") or message_text)
     conversation_service.save_message(
@@ -209,6 +211,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
     )
     lead_service.increment_message_count(lead.id, commit=False)
 
+    # Om state är welcome (eller saknas) så startas profilflödet igen
     if not lead.conversation_state or lead.conversation_state == "welcome":
         status, prompt_en, prompt_sv = _next_profile_prompt(lead)
         if status != "complete":
@@ -254,6 +257,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             if phone and (phone.isdigit() or phone.startswith("+")):
                 lead.phone = phone
 
+        ## Fortsätt fråga nästa sak
         next_status, prompt_en, prompt_sv = _next_profile_prompt(lead)
         if next_status != "complete":
             lead.notes = f"profile_status:{next_status}"
@@ -269,6 +273,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
                 commit=False,
             )
         else:
+            # Komplett profil skicka booking intro + länk
             lead.conversation_state = "profile_complete"
             lead.notes = "waiting_for_calendar_booking"
             book_en, book_sv = _recommend_booking_both(lead)
@@ -311,6 +316,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         fallback = t(_lang(lead), "enter_info_above")
         return ChatResponse(session_id=session_id, messages=responses if responses else [fallback], language=lead.language or "en")
 
+    # Hämtar historik i rätt format för ChatHandler
     conversation_history = conversation_service.get_conversation_history_for_ai(
         lead_id=lead.id,
         messenger_id=sender_id,
@@ -366,6 +372,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
     if ai_response.get("next_state") and ai_response["next_state"] != current_state:
         lead.conversation_state = ai_response["next_state"]
 
+    #om user nämner något keyword så skickas en bokningslänk
     calendar_keywords = ["calendar", "available", "time slot", "schedule", "appointment", "book", "booking"]
     if any(k in message_text.lower() for k in calendar_keywords) and current_state in [
         "profile_complete",
@@ -379,6 +386,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         lead.notes = "waiting_for_calendar_booking"
         lead.conversation_state = "recommending_booking"
 
+    # Lägg svaret i listan som skickas till frontend
     responses.append(response_text)
     conv = conversation_service.save_message(
         lead_id=lead.id,

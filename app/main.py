@@ -75,6 +75,7 @@ app.add_middleware(
 )
 
 # Include routers
+#kopplar in endpoints från en annan fil.
 app.include_router(meta_webhook.router, prefix="/webhooks/meta", tags=["webhooks"])
 app.include_router(calendar_webhook.router, prefix="/webhooks/calendar", tags=["webhooks"])
 app.include_router(leads.router, prefix="/api/leads", tags=["leads"])
