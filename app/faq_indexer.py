@@ -55,6 +55,9 @@ def run_indexer(recreate_table: bool = False) -> Dict[str, Any]:
             search_strategy="hnsw",
             embedding_dimension=EMBEDDING_DIMENSION,
         )
+        if not recreate_table:
+            store.delete_all_documents()
+
         embedder = OpenAIDocumentEmbedder(
             api_key=Secret.from_token(settings.openai_api_key),
             model=settings.openai_embedding_model,

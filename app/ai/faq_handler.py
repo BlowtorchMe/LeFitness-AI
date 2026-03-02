@@ -47,13 +47,11 @@ def _retrieve_answer_sync(question: str) -> Optional[str]:
         answer = (meta.get("answer") or "").strip()
         video = (meta.get("video_link") or "").strip()
 
-        if not answer:
-            return None
-
         if video and video not in answer:
-            return f"{answer}\n\nVideo: {video}"
+            return f"{answer.rstrip()}\n\n[Video]({video})"
 
         return answer
+
     except Exception:
         return None
 
