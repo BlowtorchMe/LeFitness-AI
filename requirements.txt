@@ -26,3 +26,6 @@ deep-translator==1.11.4
 python-multipart==0.0.6
 httpx==0.25.2
 apscheduler==3.10.4
+
+# Development tools
+uvicorn[standard]==0.32.0

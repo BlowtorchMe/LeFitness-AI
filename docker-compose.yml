@@ -1,0 +1,38 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: always
+    environment:
+      POSTGRES_USER: lefitness
+      POSTGRES_PASSWORD: lefitness
+      POSTGRES_DB: lefitness_ai_backend
+    ports:
+      - "5431:5432"
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@lefitness.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+
+  backend:
+    build:
+      context: .
+      dockerfile: DockerFileBackend
+    environment:
+      OPENAI_API_KEY: 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
+      DATABASE_URL: postgresql+psycopg://lefitness:lefitness@db:5432/lefitness_ai_backend
+    ports:
+      - "8080:8000"
+    depends_on:
+      - db
+
+volumes:
+  dbdata:
