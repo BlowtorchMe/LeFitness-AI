@@ -2,37 +2,57 @@ services:
   db:
     image: pgvector/pgvector:pg16
     restart: always
+    env_file:
+      - .env.docker
     environment:
-      POSTGRES_USER: lefitness
-      POSTGRES_PASSWORD: lefitness
-      POSTGRES_DB: lefitness_ai_backend
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5431:5432"
     volumes:
       - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   pgadmin:
     image: dpage/pgadmin4:latest
     restart: always
+    env_file:
+      - .env.docker
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@lefitness.com
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
     ports:
       - "5050:80"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+
 
   backend:
     build:
       context: .
       dockerfile: DockerFileBackend
+    restart: always
+    env_file:
+        - .env.docker
     environment:
-      OPENAI_API_KEY: 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
-      DATABASE_URL: postgresql+psycopg://lefitness:lefitness@db:5432/lefitness_ai_backend
+        DATABASE_URL: ${DATABASE_URL}
+        PG_CONN_STR: ${PG_CONN_STR}
+        GOOGLE_APPOINTMENT_SCHEDULE_LINK: ${GOOGLE_APPOINTMENT_SCHEDULE_LINK}
+        OPENAI_API_KEY: ${OPENAI_API_KEY}
+        OPENAI_MODEL: ${OPENAI_MODEL}
+        GYM_NAME: ${GYM_NAME}
+        USE_MOCK_APIS: ${USE_MOCK_APIS}
+        TEST_MODE: ${TEST_MODE}
     ports:
-      - "8080:8000"
+        - "8080:8000"
     depends_on:
-      - db
-
+        db:
+          condition: service_healthy
 volumes:
   dbdata:
