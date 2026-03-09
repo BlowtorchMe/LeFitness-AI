@@ -13,7 +13,7 @@ from app.ai.conversation_state import ConversationState, ConversationFlowManager
 
 class ChatHandler:
     """Handles AI conversations with customers"""
-    
+
     def __init__(self):
         # Initialize OpenAI client only if API key is available
         self.client = None
@@ -25,7 +25,7 @@ class ChatHandler:
         self.faq_handler = FAQHandler() # söker i pgvector-FAQ
         self.intent_recognizer = IntentRecognizer() # försöker förstå intent
         self.flow_manager = ConversationFlowManager()
-    
+
     async def process_message(
         self,
         user_message: str,
@@ -37,31 +37,43 @@ class ChatHandler:
         """
         Process a user message and generate an AI response
         The agent proactively guides the conversation through the booking flow
-        
-        Args:
-            user_message: The message from the customer
-            conversation_history: Previous messages in the conversation
-            customer_info: Customer information (name, phone, etc.)
-            conversation_state: Current state in conversation flow
-        
-        Returns:
-            Dict with response text, intent, next_state, and any actions needed
         """
+
         # Recognize intent
         intent = await self.intent_recognizer.recognize(user_message)
-        
+
         # Determine current state
         current_state = ConversationState(conversation_state) if conversation_state else ConversationState.WELCOME
-        
-        # Check FAQ first
+
+        # --- FAQ FIRST (FAST PATH) ---
         faq_answer = await self.faq_handler.get_answer(user_message)
-        
+
+        # ✅ If FAQ matched, return it immediately (don’t force booking flow)
+        if faq_answer:
+            answer_text = faq_answer.get("answer")
+            video_link = faq_answer.get("video_link")  # important: matches your faq_handler return key
+
+            # Keep response format simple: response + messages list (like your API already returns)
+            # If your frontend expects "messages": [...], keep that.
+            return {
+                "response": answer_text,
+                "response_en": answer_text,
+                "response_sv": answer_text,
+                "intent": "faq",
+                "current_state": current_state.value,
+                "next_state": current_state.value,
+                "faq_used": True,
+                "needs_human": False,
+                "should_proceed": False,
+                "faq_video_url": video_link,
+            }
+
         # Get state-specific prompt
         state_prompt = self.flow_manager.get_state_prompt(current_state, customer_info or {})
-        
+
         # Build conversation context
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        
+
         messages.append({
             "role": "system",
             "content": f"""You must reply with BOTH English and Swedish. Output exactly:
@@ -73,7 +85,7 @@ class ChatHandler:
 No other format. Both blocks are required every time.
 
 Current conversation state: {current_state.value}
-            
+
 {state_prompt}
 
 IMPORTANT: You are actively leading this conversation. Your goal is to guide the customer through:
@@ -86,30 +98,37 @@ IMPORTANT: You are actively leading this conversation. Your goal is to guide the
 
 Be proactive! Don't just answer questions - guide them toward booking. If they ask questions, answer briefly then guide back to booking."""
         })
-        
-        # Add FAQ context
+
+        # Add FAQ context (will be empty here since we early-returned on faq match)
+        # Leaving structure intact in case you later want “soft-FAQ” behaviour.
         if faq_answer:
             messages.append({
                 "role": "system",
-                "content": f"FAQ Context: {FAQ_CONTEXT}\n\nRelevant FAQ: {faq_answer}"
+                "content": f"FAQ Context: {FAQ_CONTEXT}\n\nRelevant FAQ: {faq_answer.get('answer')}"
             })
-        
+
         # Add customer info if available
         if customer_info:
             customer_context = f"Customer info: {customer_info}"
             messages.append({"role": "system", "content": customer_context})
-        
+
         # Add conversation history
         if conversation_history:
             messages.extend(conversation_history)
-        
+
         # Add current user message
         messages.append({"role": "user", "content": user_message})
-        
+
         if not self.client:
             err = "I'm sorry, the AI service is not configured. Please contact support."
-            return {"response": err, "response_en": err, "response_sv": None, "intent": "error", "next_state": conversation_state}
-        
+            return {
+                "response": err,
+                "response_en": err,
+                "response_sv": None,
+                "intent": "error",
+                "next_state": conversation_state
+            }
+
         try:
             response = self.client.chat.completions.create(
                 model=settings.openai_model,
@@ -121,6 +140,7 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
             response_en, response_sv = self._parse_bilingual_response(raw)
             single = response_en or response_sv or raw
             next_state = self._determine_next_state(current_state, intent, user_message, customer_info)
+
             return {
                 "response": single,
                 "response_en": response_en,
@@ -128,11 +148,12 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 "intent": intent,
                 "current_state": current_state.value,
                 "next_state": next_state.value if next_state else current_state.value,
-                "faq_used": faq_answer is not None,
+                "faq_used": False,  # important: FAQ not used here
                 "needs_human": self._should_escalate(user_message, single),
-                "should_proceed": self._should_proceed_to_next_state(current_state, intent)
+                "should_proceed": self._should_proceed_to_next_state(current_state, intent),
+                "faq_video_url": None,
             }
-        
+
         except Exception as e:
             fallback = f"I apologize, but I'm having trouble right now. Please call us at {settings.gym_phone} and we'll be happy to help!"
             return {
@@ -146,7 +167,7 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 "needs_human": True,
                 "error": str(e)
             }
-    
+
     def _determine_next_state(
         self,
         current_state: ConversationState,
@@ -155,37 +176,36 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
         customer_info: Optional[Dict]
     ) -> Optional[ConversationState]:
         """Determine next state based on current state and user intent"""
-        
+
         # If booking intent detected, move to collecting details
         if intent == "book" and current_state in [ConversationState.PROFILE_COMPLETE, ConversationState.RECOMMENDING_BOOKING]:
             return ConversationState.COLLECTING_BOOKING_DETAILS
-        
+
         # If user provides date/time, move to confirmation
         if current_state == ConversationState.COLLECTING_BOOKING_DETAILS:
-            # Check if message contains date/time indicators
-            time_indicators = ["tomorrow", "today", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "am", "pm", ":", "at"]
+            time_indicators = ["tomorrow", "today", "monday", "tuesday", "wednesday", "thursday", "friday",
+                               "saturday", "sunday", "am", "pm", ":", "at"]
             if any(indicator in user_message.lower() for indicator in time_indicators):
                 return ConversationState.CONFIRMING_BOOKING
-        
+
         # If user confirms, move to booking confirmed
         if current_state == ConversationState.CONFIRMING_BOOKING and intent in ["book", "greeting"]:
             return ConversationState.BOOKING_CONFIRMED
-        
+
         # If profile complete and user asks questions, still recommend booking
         if current_state == ConversationState.PROFILE_COMPLETE and intent == "question":
             return ConversationState.RECOMMENDING_BOOKING
-        
-        # Default: get next state from flow manager
+
         return self.flow_manager.get_next_state(current_state)
-    
+
     def _should_proceed_to_next_state(self, current_state: ConversationState, intent: str) -> bool:
         """Determine if we should proactively move to next state"""
         if current_state == ConversationState.PROFILE_COMPLETE:
-            return True  # Always recommend booking after profile complete
+            return True
         if current_state == ConversationState.RECOMMENDING_BOOKING and intent == "book":
-            return True  # User wants to book
+            return True
         return False
-    
+
     def _get_swedish_from_ai(self, text_en: str) -> Optional[str]:
         if not text_en or not self.client:
             return None
@@ -223,7 +243,6 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
 
     def _should_escalate(self, user_message: str, ai_response: str) -> bool:
         """Determine if conversation should be escalated to human"""
-        # Simple heuristics - can be enhanced
         uncertainty_phrases = [
             "I'm not sure",
             "I don't know",
@@ -231,12 +250,10 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
             "I cannot",
             "I'm unable"
         ]
-        
         return any(phrase.lower() in ai_response.lower() for phrase in uncertainty_phrases)
-    
+
     def get_welcome_message(self, language: str = "en", customer_name: Optional[str] = None) -> str:
         """Generate welcome message in the given language."""
         if customer_name:
             return t(language, "welcome_hi", name=customer_name)
         return t(language, "welcome")
-

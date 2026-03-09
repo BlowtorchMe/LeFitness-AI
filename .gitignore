@@ -67,3 +67,4 @@ celerybeat.pid
 .vercel
 vercel.json.bak
 
+app/package-lock.json
