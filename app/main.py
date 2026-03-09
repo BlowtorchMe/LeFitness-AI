@@ -26,8 +26,8 @@ MEDIA_BASE_URL = os.getenv("MEDIA_BASE_URL", "http://localhost:8080/media")
 
 VIDEO_DIR = MEDIA_ROOT / "videos"
 IMAGE_DIR = MEDIA_ROOT / "images"
-VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+IS_VERCEL = os.getenv("VERCEL") == "1"
 
 ALLOWED = {
     "video/mp4": ("videos", ".mp4"),
@@ -57,13 +57,15 @@ def renew_webhook_job():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle events for the app"""
-    # Startup: Set up calendar webhook and scheduler
     logger.info("Starting up...")
+
+    if not IS_VERCEL:
+        VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+        IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
     if settings.google_calendar_id and settings.google_service_account and settings.google_calendar_webhook_url:
         result = calendar_webhook_service.setup_webhook()
         if result.get("success"):
-            # Schedule webhook renewal every 6 days (cron-like)
             scheduler.add_job(
                 renew_webhook_job,
                 trigger=IntervalTrigger(days=6),
@@ -79,9 +81,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: Stop scheduler and webhook
     logger.info("Shutting down...")
-    scheduler.shutdown()
+    if scheduler.running:
+        scheduler.shutdown()
     if calendar_webhook_service.channel_id:
         calendar_webhook_service.stop_webhook()
 
@@ -96,7 +98,7 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -113,6 +115,8 @@ app.include_router(faq.router, prefix="/api/faq", tags=["faq"])
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
+    if IS_VERCEL:
+        raise HTTPException(status_code=501, detail="Local media upload is disabled on Vercel")
 
     if file.content_type not in ALLOWED:
         raise HTTPException(status_code=415, detail=f"Unsupported file type: {file.content_type}")
@@ -124,7 +128,6 @@ async def upload(file: UploadFile = File(...)):
     target_dir = VIDEO_DIR if folder == "videos" else IMAGE_DIR
     dest = target_dir / filename
 
-    # NOTE: For large videos, you can switch to streamed copy to avoid RAM usage.
     data = await file.read()
     if len(data) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="File too large")
@@ -137,7 +140,6 @@ async def upload(file: UploadFile = File(...)):
 
 @app.get("/")
 async def root():
-    """Health check endpoint"""
     return {
         "status": "ok",
         "app": settings.app_name,
@@ -147,7 +149,6 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint"""
     return {"status": "healthy"}
 
 
