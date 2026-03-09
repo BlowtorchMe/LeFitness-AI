@@ -63,7 +63,7 @@ async def import_faqs(
     reindex_count = 0
     reindex_error = None
     if reindex and imported:
-        result = run_indexer(recreate_table=False)
+        result = run_indexer(recreate_table=True)
         reindex_count = result.get("count", 0)
         reindex_error = result.get("error")
     return FAQImportResponse(
@@ -77,7 +77,7 @@ async def import_faqs(
 @router.post("/reindex", response_model=ReindexResponse)
 async def reindex_faqs():
     """Run FAQ indexer (embed FAQs from DB into pgvector). For admin use."""
-    result = run_indexer(recreate_table=False)
+    result = run_indexer(recreate_table=True)
     return ReindexResponse(
         success=result["success"],
         count=result["count"],

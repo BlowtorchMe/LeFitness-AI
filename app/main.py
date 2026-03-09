@@ -83,17 +83,22 @@ app = FastAPI(
 )
 
 # CORS middleware
+
+def get_allowed_origins() -> list[str]:
+    raw = os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173"
+    )
+    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "https://le-fitness-ai-frontend.vercel.app",
-    ],
+    allow_origins=get_allowed_origins(),
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # Include routers
 #kopplar in endpoints från en annan fil.
 app.include_router(meta_webhook.router, prefix="/webhooks/meta", tags=["webhooks"])
