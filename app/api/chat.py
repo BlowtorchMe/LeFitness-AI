@@ -9,6 +9,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
 from app.config import settings
 from app.database.database import get_db, SessionLocal
 from app.models.conversation import ConversationChannel, MessageDirection, Conversation
@@ -30,6 +31,7 @@ faq_handler = FAQHandler()
 # =========================
 
 MACHINE_VIDEO_BASE_URL = (settings.machine_video_base_url or "").rstrip("/")
+
 MACHINES = {
     "leg-press": {
         "name": "Leg Press",
@@ -316,6 +318,35 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             faq_video_url=machine["video_url"],
         )
 
+    # Manual machine help: answer with machine info + video even during onboarding,
+    # but keep the onboarding state unchanged.
+    if machine:
+        response_text = machine["description_sv"] if lang_lead == "sv" else machine["description_en"]
+        responses.append(response_text)
+
+        conversation_service.save_message(
+            lead_id=lead.id,
+            channel=ConversationChannel.WEB,
+            direction=MessageDirection.OUTBOUND,
+            message_text_en=machine["description_en"],
+            message_text_sv=machine["description_sv"],
+            messenger_id=sender_id,
+            intent="machine_info",
+            ai_response=response_text,
+            faq_used="true",
+            commit=False,
+        )
+
+        lead_service.increment_message_count(lead.id, commit=False)
+        lead_service.db.commit()
+
+        return ChatResponse(
+            session_id=session_id,
+            messages=responses,
+            language=lead.language or "en",
+            faq_video_url=machine["video_url"],
+        )
+
     if not lead.conversation_state or lead.conversation_state == "welcome":
         status, prompt_en, prompt_sv = _next_profile_prompt(lead)
         if status != "complete":
@@ -434,35 +465,6 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             session_id=session_id,
             messages=responses if responses else [fallback],
             language=lead.language or "en",
-        )
-
-    # vanlig scanner i chatten ska också fungera
-    machine = _get_machine_from_message(message_text)
-    if machine:
-        response_text = machine["description_sv"] if lang_lead == "sv" else machine["description_en"]
-        responses.append(response_text)
-
-        conversation_service.save_message(
-            lead_id=lead.id,
-            channel=ConversationChannel.WEB,
-            direction=MessageDirection.OUTBOUND,
-            message_text_en=machine["description_en"],
-            message_text_sv=machine["description_sv"],
-            messenger_id=sender_id,
-            intent="machine_info",
-            ai_response=response_text,
-            faq_used="true",
-            commit=False,
-        )
-
-        lead_service.increment_message_count(lead.id, commit=False)
-        lead_service.db.commit()
-
-        return ChatResponse(
-            session_id=session_id,
-            messages=responses,
-            language=lead.language or "en",
-            faq_video_url=machine["video_url"],
         )
 
     faq = await faq_handler.get_answer(message_text)
