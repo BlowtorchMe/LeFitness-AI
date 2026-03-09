@@ -36,6 +36,9 @@ ENV/
 # Environment variables
 .env
 .env.local
+.env.docker
+.env.*
+!.env.example
 
 # Database
 *.db
@@ -65,4 +68,7 @@ celerybeat.pid
 # Vercel
 .vercel
 vercel.json.bak
+
+videos/
+*.mp4
 

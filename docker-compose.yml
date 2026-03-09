@@ -1,0 +1,47 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: lifit
+      POSTGRES_USER: lefitness
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build: .
+    depends_on:
+      - db
+      - apache
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.docker
+    environment:
+      - MEDIA_ROOT=/var/www/media
+      - MEDIA_BASE_URL=http://localhost:8080/videos
+    volumes:
+      - ./videos:/var/www/media
+
+  apache:
+    image: httpd:2.4
+    ports:
+      - "8080:80"
+    volumes:
+      - ./videos:/usr/local/apache2/htdocs/videos
+
+  frontend:
+    build:
+      context: ../LeFitness-AI-Frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_PROXY_TARGET=http://api:8000
+
+volumes:
+  pgdata:
