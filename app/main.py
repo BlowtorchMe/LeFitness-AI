@@ -3,9 +3,7 @@ Main FastAPI application entry point
 """
 import logging
 import os
-import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,13 +18,6 @@ from app.webhooks import meta_webhook, calendar_webhook
 
 logger = logging.getLogger(__name__)
 
-# -------- Media upload config (Docker/Apache) --------
-MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "./media"))
-MEDIA_BASE_URL = os.getenv("MEDIA_BASE_URL", "http://localhost:8080/media")
-
-VIDEO_DIR = MEDIA_ROOT / "videos"
-IMAGE_DIR = MEDIA_ROOT / "images"
-
 IS_VERCEL = os.getenv("VERCEL") == "1"
 
 ALLOWED = {
@@ -38,7 +29,7 @@ ALLOWED = {
     "image/gif": ("images", ".gif"),
 }
 
-MAX_BYTES = 50 * 1024 * 1024  # 50MB (justera vid behov)
+MAX_BYTES = 50 * 1024 * 1024  # 50MB
 
 # Global scheduler instance
 scheduler = AsyncIOScheduler()
@@ -58,10 +49,6 @@ def renew_webhook_job():
 async def lifespan(app: FastAPI):
     """Lifecycle events for the app"""
     logger.info("Starting up...")
-
-    if not IS_VERCEL:
-        VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-        IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
     if settings.google_calendar_id and settings.google_service_account and settings.google_calendar_webhook_url:
         result = calendar_webhook_service.setup_webhook()
@@ -118,27 +105,17 @@ app.include_router(faq.router, prefix="/api/faq", tags=["faq"])
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    if IS_VERCEL:
-        raise HTTPException(status_code=501, detail="Local media upload is disabled on Vercel")
-
+    """
+    Upload is no longer handled via local disk/Apache.
+    Keep endpoint for compatibility, but make current behavior explicit.
+    """
     if file.content_type not in ALLOWED:
         raise HTTPException(status_code=415, detail=f"Unsupported file type: {file.content_type}")
 
-    folder, default_ext = ALLOWED[file.content_type]
-    ext = Path(file.filename).suffix.lower() or default_ext
-    filename = f"{uuid.uuid4().hex}{ext}"
-
-    target_dir = VIDEO_DIR if folder == "videos" else IMAGE_DIR
-    dest = target_dir / filename
-
-    data = await file.read()
-    if len(data) > MAX_BYTES:
-        raise HTTPException(status_code=413, detail="File too large")
-
-    dest.write_bytes(data)
-
-    public_url = f"{MEDIA_BASE_URL}/{folder}/{filename}"
-    return {"url": public_url, "content_type": file.content_type}
+    raise HTTPException(
+        status_code=501,
+        detail="Local upload is disabled. Upload media to Blob storage and save the returned URL instead."
+    )
 
 
 @app.get("/")

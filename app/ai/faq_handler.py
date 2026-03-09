@@ -33,7 +33,6 @@ def _to_libpq_conn_str(url: str) -> str:
 
 
 def _ensure_pg_conn_str() -> None:
-    # Prefer explicit PG_CONN_STR if set
     if os.environ.get("PG_CONN_STR"):
         return
 

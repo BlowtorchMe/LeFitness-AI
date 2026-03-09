@@ -29,10 +29,15 @@ class Settings(BaseSettings):
 
     # Google Calendar (Optional - only needed for booking tracking)
     google_calendar_id: Optional[str] = None
+    google_calendar_id_varmdo: Optional[str] = None
+    google_calendar_id_taby: Optional[str] = None
     google_service_account: Optional[str] = None
     google_appointment_schedule_link: Optional[str] = None
     google_calendar_webhook_url: Optional[str] = None  # Public URL for calendar webhook
     timezone: str = "UTC"
+
+    # Media / video
+    machine_video_base_url: Optional[str] = None
 
     # Database (MÅSTE finnas i env/.env eller docker compose environment)
     database_url: str
@@ -44,6 +49,9 @@ class Settings(BaseSettings):
     gym_name: str = "LE Fitness"
     gym_phone: Optional[str] = None
     gym_email: Optional[str] = None
+
+    # Machine videos
+    machine_video_base_url: Optional[str] = None
 
     # Free Trial Period
     free_trial_days: int = 10

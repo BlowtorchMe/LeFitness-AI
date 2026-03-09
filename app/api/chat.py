@@ -9,7 +9,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-
+from app.config import settings
 from app.database.database import get_db, SessionLocal
 from app.models.conversation import ConversationChannel, MessageDirection, Conversation
 from app.services.lead_service import LeadService
@@ -29,8 +29,7 @@ faq_handler = FAQHandler()
 # MACHINE / QR CONFIG
 # =========================
 
-MEDIA_BASE_URL = "http://192.168.1.57:8080/videos"
-
+MACHINE_VIDEO_BASE_URL = (settings.machine_video_base_url or "").rstrip("/")
 MACHINES = {
     "leg-press": {
         "name": "Leg Press",
@@ -50,8 +49,10 @@ MACHINES = {
 }
 
 
-def _build_video_url(machine_slug: str) -> str:
-    return f"{MEDIA_BASE_URL}/{machine_slug}.mp4"
+def _build_video_url(machine_slug: str) -> Optional[str]:
+    if not MACHINE_VIDEO_BASE_URL:
+        return None
+    return f"{MACHINE_VIDEO_BASE_URL}/{machine_slug}.mp4"
 
 
 def _normalize_machine_slug(text: str) -> str:
