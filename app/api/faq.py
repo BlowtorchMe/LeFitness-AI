@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database.database import get_db
 from app.models.faq import FAQ, FAQSchema, FAQRecord
-from app.faq_indexer import run_indexer
+from app.faq_indexer import run_indexer, upsert_faq_embedding, delete_faq_embeddings
 
 router = APIRouter()
 
@@ -90,9 +90,20 @@ async def create_faq(body: FAQSchema, db: Session = Depends(get_db)):
     """Add one FAQ. Example for admin form (add one by one)."""
     faq = FAQ(question=body.question, answer=body.answer, video_link=body.video_link)
     db.add(faq)
-    db.commit()
-    db.refresh(faq)
-    return faq.to_record()
+    try:
+        db.flush()
+        sync = upsert_faq_embedding(faq)
+        if not sync.get("success"):
+            raise HTTPException(status_code=500, detail=f"Failed to index FAQ embedding: {sync.get('error')}")
+        db.commit()
+        db.refresh(faq)
+        return faq.to_record()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create FAQ: {str(e)}")
 
 
 @router.get("/", response_model=FAQListResponse)
@@ -141,12 +152,22 @@ async def update_faq(faq_id: int, body: FAQSchema, db: Session = Depends(get_db)
     faq = db.query(FAQ).filter(FAQ.id == faq_id).first()
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ not found")
-    faq.question = body.question
-    faq.answer = body.answer
-    faq.video_link = body.video_link
-    db.commit()
-    db.refresh(faq)
-    return faq.to_record()
+    try:
+        faq.question = body.question
+        faq.answer = body.answer
+        faq.video_link = body.video_link
+        sync = upsert_faq_embedding(faq)
+        if not sync.get("success"):
+            raise HTTPException(status_code=500, detail=f"Failed to update FAQ embedding: {sync.get('error')}")
+        db.commit()
+        db.refresh(faq)
+        return faq.to_record()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update FAQ: {str(e)}")
 
 
 @router.delete("/{faq_id}", status_code=204)
@@ -156,6 +177,16 @@ async def delete_faq(faq_id: int, db: Session = Depends(get_db)):
     faq = db.query(FAQ).filter(FAQ.id == faq_id).first()
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ not found")
-    db.delete(faq)
-    db.commit()
-    return None
+    try:
+        sync = delete_faq_embeddings(faq_id)
+        if not sync.get("success"):
+            raise HTTPException(status_code=500, detail=f"Failed to delete FAQ embedding: {sync.get('error')}")
+        db.delete(faq)
+        db.commit()
+        return None
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete FAQ: {str(e)}")

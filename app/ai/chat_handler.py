@@ -2,6 +2,8 @@
 Main AI conversation handler
 """
 import openai
+import logging
+from time import perf_counter
 from typing import Optional, Dict, List
 from app.config import settings
 from app.ai.prompts import SYSTEM_PROMPT, FAQ_CONTEXT
@@ -25,6 +27,7 @@ class ChatHandler:
         self.faq_handler = FAQHandler()
         self.intent_recognizer = IntentRecognizer()
         self.flow_manager = ConversationFlowManager()
+        self.logger = logging.getLogger(__name__)
     
     async def process_message(
         self,
@@ -47,14 +50,17 @@ class ChatHandler:
         Returns:
             Dict with response text, intent, next_state, and any actions needed
         """
+        t0 = perf_counter()
         # Recognize intent
         intent = await self.intent_recognizer.recognize(user_message)
+        t1 = perf_counter()
         
         # Determine current state
         current_state = ConversationState(conversation_state) if conversation_state else ConversationState.WELCOME
         
         # Check FAQ first
         faq_answer = await self.faq_handler.get_answer(user_message)
+        t2 = perf_counter()
         
         # Get state-specific prompt
         state_prompt = self.flow_manager.get_state_prompt(current_state, customer_info or {})
@@ -117,11 +123,12 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 temperature=0.7,
                 max_tokens=600
             )
+            t3 = perf_counter()
             raw = response.choices[0].message.content
             response_en, response_sv = self._parse_bilingual_response(raw)
             single = response_en or response_sv or raw
             next_state = self._determine_next_state(current_state, intent, user_message, customer_info)
-            return {
+            out = {
                 "response": single,
                 "response_en": response_en,
                 "response_sv": response_sv,
@@ -132,8 +139,28 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 "needs_human": self._should_escalate(user_message, single),
                 "should_proceed": self._should_proceed_to_next_state(current_state, intent)
             }
+            t4 = perf_counter()
+            self.logger.info(
+                "ai_timing intent=%.3f faq=%.3f llm=%.3f total=%.3f",
+                t1 - t0,
+                t2 - t1,
+                t3 - t2,
+                t4 - t0,
+            )
+            return out
         
         except Exception as e:
+            self.logger.exception("OpenAI chat completion failed")
+            try:
+                t_fail = perf_counter()
+                self.logger.info(
+                    "ai_timing_error intent=%.3f faq=%.3f total=%.3f",
+                    t1 - t0,
+                    t2 - t1,
+                    t_fail - t0,
+                )
+            except Exception:
+                pass
             fallback = f"I apologize, but I'm having trouble right now. Please call us at {settings.gym_phone} and we'll be happy to help!"
             return {
                 "response": fallback,
@@ -146,6 +173,7 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 "needs_human": True,
                 "error": str(e)
             }
+
     
     def _determine_next_state(
         self,
@@ -239,4 +267,3 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
         if customer_name:
             return t(language, "welcome_hi", name=customer_name)
         return t(language, "welcome")
-

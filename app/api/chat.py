@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database.database import get_db, SessionLocal
 from app.models.conversation import ConversationChannel, MessageDirection, Conversation
 from app.services.lead_service import LeadService
