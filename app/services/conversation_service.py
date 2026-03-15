@@ -27,6 +27,8 @@ class ConversationService:
         faq_used: Optional[str] = None,
         needs_human: bool = False,
         commit: bool = True,
+        flush: bool = False,
+        refresh: bool = True,
     ) -> Conversation:
         """Save a conversation message. commit=False only adds and flushes (caller commits)."""
         conversation = Conversation(
@@ -46,10 +48,12 @@ class ConversationService:
         self.db.add(conversation)
         if commit:
             self.db.commit()
-            self.db.refresh(conversation)
-        else:
+            if refresh:
+                self.db.refresh(conversation)
+        elif flush:
             self.db.flush()
-            self.db.refresh(conversation)
+            if refresh:
+                self.db.refresh(conversation)
         return conversation
     
     def get_conversation_history(
@@ -112,4 +116,3 @@ class ConversationService:
             elif conv.direction == MessageDirection.OUTBOUND:
                 history.append({"role": "assistant", "content": content})
         return history
-

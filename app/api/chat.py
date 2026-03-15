@@ -1,72 +1,43 @@
 """
-Web chat API - allows chat from a web page instead of Messenger/Instagram
-Same flow as Messenger/Instagram: welcome, profile (name, email, phone), then booking link.
+Web chat API with a minimal request pipeline:
+1. lightweight initial greeting
+2. deterministic profile collection
+3. FAQ/direct answers when possible
+4. LLM fallback for broader questions
 """
+import re
 import uuid
-from datetime import datetime
-from typing import Optional, List
+from datetime import datetime, timedelta
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.database.database import get_db, SessionLocal
-from app.models.conversation import ConversationChannel, MessageDirection, Conversation
-from app.services.lead_service import LeadService
-from app.services.conversation_service import ConversationService
 from app.ai.chat_handler import ChatHandler
 from app.ai.conversation_flow import ConversationFlow
 from app.ai.translations import get as t
-from app.ai.user_translate import translate_text as translate_user_message
+from app.database.database import SessionLocal, get_db
+from app.models.conversation import Conversation, ConversationChannel, MessageDirection
+from app.services.conversation_service import ConversationService
+from app.services.lead_service import LeadService
 
 router = APIRouter()
 chat_handler = ChatHandler()
 
-
-def _fill_sv_background(conversation_id: int, text_en: str) -> None:
-    try:
-        db = SessionLocal()
-        try:
-            sv = chat_handler._get_swedish_from_ai(text_en)
-            if sv:
-                conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
-                if conv:
-                    conv.message_text_sv = sv
-                    db.commit()
-        finally:
-            db.close()
-    except Exception:
-        pass
-
-
-def _get_calendar_link() -> str:
-    flow = ConversationFlow()
-    return flow._get_calendar_link(datetime.now())
-
-
-def _lang(lead) -> str:
-    return "sv" if (lead.language == "sv") else "en"
-
-
-def _recommend_booking_message(lead) -> str:
-    return t(_lang(lead), "booking_intro", name=lead.name or "Customer", link=_get_calendar_link())
-
-
-def _recommend_booking_both(lead) -> tuple:
-    name = lead.name or "Customer"
-    link = _get_calendar_link()
-    return t("en", "booking_intro", name=name, link=link), t("sv", "booking_intro", name=name, link=link)
-
-
-def _next_profile_prompt(lead) -> tuple:
-    """Return (next_status, message_en, message_sv) for profile gathering. message_* is None when complete."""
-    if not lead.name or lead.name == "Customer":
-        return "waiting_for_name", t("en", "please_enter_name"), t("sv", "please_enter_name")
-    if not lead.email:
-        return "waiting_for_email", t("en", "please_enter_email"), t("sv", "please_enter_email")
-    if not lead.phone:
-        return "waiting_for_phone", t("en", "please_enter_phone"), t("sv", "please_enter_phone")
-    return "complete", None, None
+PROFILE_STATUS_PREFIX = "profile_status:"
+BOOKING_STATES = {
+    "profile_complete",
+    "answering_questions",
+    "recommending_booking",
+    "collecting_booking_details",
+}
+CALENDAR_CONFIRM_PATTERNS = (
+    r"^(yes|yep|yeah|done|confirmed|scheduled|booked)[.! ]*$",
+    r"^(i('ve| have)?\s+booked(\s+it)?|i\s+booked(\s+it)?|booked\s+it|it's\s+booked|it is booked)[.! ]*$",
+    r"^(i('ve| have)?\s+scheduled(\s+it)?|i\s+scheduled(\s+it)?|scheduled\s+it|done\s+booking)[.! ]*$",
+    r"^(yes[, ]+i('ve| have)?\s+(booked|scheduled)(\s+it)?)[.! ]*$",
+)
 
 
 class ChatRequest(BaseModel):
@@ -89,114 +60,382 @@ class ChatResponse(BaseModel):
     language: Optional[str] = None
 
 
+def _fill_translation_background(conversation_id: int, source_text: str, target_lang: str) -> None:
+    try:
+        db = SessionLocal()
+        try:
+            translated = chat_handler._translate_text(source_text, target_lang)
+            if not translated:
+                return
+            conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+            if not conv:
+                return
+            if target_lang == "sv":
+                conv.message_text_sv = translated
+            else:
+                conv.message_text_en = translated
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+
+def _normalize_lang(lang: Optional[str]) -> str:
+    value = (lang or "en").strip().lower()
+    return value if value in {"en", "sv"} else "en"
+
+
+def _lang(lead) -> str:
+    return "sv" if getattr(lead, "language", None) == "sv" else "en"
+
+
+def _select_lang_text(lang: str, text_en: Optional[str], text_sv: Optional[str], fallback: str = "") -> str:
+    if lang == "sv":
+        return text_sv or text_en or fallback
+    return text_en or text_sv or fallback
+
+
+def _get_calendar_link() -> str:
+    flow = ConversationFlow()
+    return flow._get_calendar_link(datetime.now())
+
+
+def _recommend_booking_both(lead) -> tuple[str, str]:
+    name = lead.name or "Customer"
+    link = _get_calendar_link()
+    return (
+        t("en", "booking_intro", name=name, link=link),
+        t("sv", "booking_intro", name=name, link=link),
+    )
+
+
+def _follow_up_booking_both(lead) -> tuple[str, str]:
+    name = lead.name or "Customer"
+    link = _get_calendar_link()
+    return (
+        t("en", "booking_follow_up", name=name, link=link),
+        t("sv", "booking_follow_up", name=name, link=link),
+    )
+
+
+def _sanitize_bilingual_output(
+    text_en: Optional[str],
+    text_sv: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    if text_en and ("---SV---" in text_en or "---EN---" in text_en):
+        parsed_en, parsed_sv = ChatHandler._parse_bilingual_response(text_en)
+        text_en = parsed_en or text_en
+        text_sv = text_sv or parsed_sv
+    if text_sv and ("---SV---" in text_sv or "---EN---" in text_sv):
+        parsed_en, parsed_sv = ChatHandler._parse_bilingual_response(text_sv)
+        text_en = text_en or parsed_en
+        text_sv = parsed_sv or text_sv
+    return text_en, text_sv
+
+
+def _is_calendar_confirmation(message_text: str) -> bool:
+    normalized = " ".join((message_text or "").strip().lower().split())
+    if not normalized:
+        return False
+    return any(re.fullmatch(pattern, normalized) for pattern in CALENDAR_CONFIRM_PATTERNS)
+
+
+def _profile_status(lead) -> Optional[str]:
+    notes = getattr(lead, "notes", None) or ""
+    if notes.startswith(PROFILE_STATUS_PREFIX):
+        return notes[len(PROFILE_STATUS_PREFIX) :]
+    return None
+
+
+def _set_profile_status(lead, status: str) -> None:
+    lead.notes = f"{PROFILE_STATUS_PREFIX}{status}"
+
+
+def _next_profile_prompt(lead) -> tuple[str, Optional[str], Optional[str]]:
+    if not lead.name or lead.name == "Customer":
+        return "waiting_for_name", t("en", "please_enter_name"), t("sv", "please_enter_name")
+    if not lead.email:
+        return "waiting_for_email", t("en", "please_enter_email"), t("sv", "please_enter_email")
+    if not lead.phone:
+        return "waiting_for_phone", t("en", "please_enter_phone"), t("sv", "please_enter_phone")
+    return "complete", None, None
+
+
+def _is_valid_phone(phone: str) -> bool:
+    normalized = phone.replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+    return bool(normalized) and (normalized.isdigit() or normalized.startswith("+"))
+
+
+def _initial_messages(lang: str) -> List[str]:
+    welcome_en = chat_handler.get_welcome_message(language="en")
+    welcome_sv = chat_handler.get_welcome_message(language="sv")
+    prompt_en = t("en", "please_enter_name")
+    prompt_sv = t("sv", "please_enter_name")
+    return [
+        _select_lang_text(lang, welcome_en, welcome_sv),
+        _select_lang_text(lang, prompt_en, prompt_sv),
+    ]
+
+
+def _load_web_conversations(db: Session, lead_id: int) -> List[Conversation]:
+    return (
+        db.query(Conversation)
+        .filter(
+            Conversation.lead_id == lead_id,
+            Conversation.channel == ConversationChannel.WEB,
+        )
+        .order_by(Conversation.created_at.asc())
+        .all()
+    )
+
+
+def _history_from_conversations(conversations: List[Conversation]) -> List[ChatMessageHistory]:
+    history: List[ChatMessageHistory] = []
+    for conv in conversations:
+        text_en = conv.message_text_en or conv.message_text_sv
+        history.append(
+            ChatMessageHistory(
+                role="user" if conv.direction == MessageDirection.INBOUND else "bot",
+                text=text_en,
+                text_en=text_en,
+                text_sv=conv.message_text_sv,
+            )
+        )
+    return history
+
+
+def _should_send_booking_follow_up(lead, conversations: List[Conversation]) -> bool:
+    if not conversations:
+        return False
+    if lead.conversation_state not in {"profile_complete", "recommending_booking", "answering_questions"}:
+        return False
+    if lead.notes == "calendar_booking_pending_verification":
+        return False
+    last_message_at = conversations[-1].created_at
+    if not last_message_at:
+        return False
+    return last_message_at <= datetime.utcnow() - timedelta(days=1)
+
+
+def _save_outbound_message(
+    conversation_service: ConversationService,
+    lead_id: int,
+    sender_id: str,
+    text_en: Optional[str],
+    text_sv: Optional[str],
+    *,
+    commit: bool = False,
+    intent: Optional[str] = None,
+    ai_response: Optional[str] = None,
+    faq_used: Optional[bool] = None,
+    flush: bool = False,
+    refresh: bool = False,
+) -> Conversation:
+    return conversation_service.save_message(
+        lead_id=lead_id,
+        channel=ConversationChannel.WEB,
+        direction=MessageDirection.OUTBOUND,
+        message_text_en=text_en,
+        message_text_sv=text_sv,
+        messenger_id=sender_id,
+        intent=intent,
+        ai_response=ai_response,
+        faq_used="true" if faq_used else None,
+        commit=commit,
+        flush=flush,
+        refresh=refresh,
+    )
+
+
+def _append_bot_message(
+    responses: List[str],
+    conversation_service: ConversationService,
+    lead,
+    sender_id: str,
+    lang: str,
+    text_en: Optional[str],
+    text_sv: Optional[str],
+    background_tasks: Optional[BackgroundTasks] = None,
+    *,
+    commit: bool = False,
+    intent: Optional[str] = None,
+    ai_response: Optional[str] = None,
+    faq_used: Optional[bool] = None,
+) -> Conversation:
+    text_en, text_sv = _sanitize_bilingual_output(text_en, text_sv)
+    response_text = _select_lang_text(lang, text_en, text_sv)
+    responses.append(response_text)
+    needs_translation_id = bool(background_tasks and ((text_en and not text_sv) or (text_sv and not text_en)))
+    conv = _save_outbound_message(
+        conversation_service,
+        lead.id,
+        sender_id,
+        text_en,
+        text_sv,
+        commit=commit,
+        intent=intent,
+        ai_response=ai_response or response_text,
+        faq_used=faq_used,
+        flush=needs_translation_id,
+        refresh=needs_translation_id,
+    )
+    if background_tasks:
+        if text_en and not text_sv:
+            background_tasks.add_task(_fill_translation_background, conv.id, text_en, "sv")
+        elif text_sv and not text_en:
+            background_tasks.add_task(_fill_translation_background, conv.id, text_sv, "en")
+    return conv
+
+
+def _create_web_lead(lead_service: LeadService, sender_id: str, requested_lang: str):
+    lead = lead_service.create_lead(
+        name="Customer",
+        messenger_id=sender_id,
+        platform="web",
+        email=None,
+        source="web_chat",
+        commit=False,
+    )
+    lead.language = requested_lang
+    lead.conversation_state = "gathering_profile"
+    return lead
+
+
+def _persist_initial_messages(
+    lead,
+    conversation_service: ConversationService,
+    sender_id: str,
+) -> None:
+    welcome_en = chat_handler.get_welcome_message(language="en")
+    welcome_sv = chat_handler.get_welcome_message(language="sv")
+    _save_outbound_message(conversation_service, lead.id, sender_id, welcome_en, welcome_sv, commit=False)
+    next_status, prompt_en, prompt_sv = _next_profile_prompt(lead)
+    if next_status == "complete":
+        lead.conversation_state = "recommending_booking"
+        lead.notes = "waiting_for_calendar_booking"
+        book_en, book_sv = _recommend_booking_both(lead)
+        _save_outbound_message(conversation_service, lead.id, sender_id, book_en, book_sv, commit=False)
+        return
+    lead.conversation_state = "gathering_profile"
+    _set_profile_status(lead, next_status)
+    _save_outbound_message(conversation_service, lead.id, sender_id, prompt_en, prompt_sv, commit=False)
+
+
+def _prepare_inbound_texts(lead, message_text: str) -> tuple[Optional[str], Optional[str]]:
+    if _profile_status(lead):
+        return message_text, message_text
+    if _lang(lead) == "sv":
+        return None, message_text
+    return message_text, None
+
+
+def _update_profile_from_message(lead, message_text: str) -> None:
+    status = _profile_status(lead)
+    if status == "waiting_for_name" and message_text.strip():
+        lead.name = message_text.strip()
+    elif status == "waiting_for_email" and "@" in message_text:
+        lead.email = message_text.strip()
+    elif status == "waiting_for_phone" and _is_valid_phone(message_text.strip()):
+        lead.phone = (
+            message_text.strip()
+            .replace("-", "")
+            .replace(" ", "")
+            .replace("(", "")
+            .replace(")", "")
+        )
+
+
+def _respond_for_profile_flow(
+    lead,
+    conversation_service: ConversationService,
+    sender_id: str,
+    lang: str,
+    responses: List[str],
+) -> None:
+    next_status, prompt_en, prompt_sv = _next_profile_prompt(lead)
+    if next_status != "complete":
+        lead.conversation_state = "gathering_profile"
+        _set_profile_status(lead, next_status)
+        _append_bot_message(
+            responses,
+            conversation_service,
+            lead,
+            sender_id,
+            lang,
+            prompt_en,
+            prompt_sv,
+            commit=False,
+        )
+        return
+    lead.conversation_state = "recommending_booking"
+    lead.notes = "waiting_for_calendar_booking"
+    book_en, book_sv = _recommend_booking_both(lead)
+    _append_bot_message(
+        responses,
+        conversation_service,
+        lead,
+        sender_id,
+        lang,
+        book_en,
+        book_sv,
+        commit=False,
+    )
+
 @router.post("/", response_model=ChatResponse)
 async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """
-    Web chat endpoint. Same flow as Messenger/Instagram: welcome, name, email, phone, then booking link.
-    """
     session_id = request.session_id or uuid.uuid4().hex
     sender_id = session_id
+    requested_lang = _normalize_lang(request.language)
     message_text = (request.message or "").strip()
-    requested_lang = (request.language or "en").strip().lower()
-    if requested_lang not in ("en", "sv"):
-        requested_lang = "en"
     responses: List[str] = []
 
     lead_service = LeadService(db)
     conversation_service = ConversationService(db)
     lead = lead_service.get_lead_by_messenger_id(sender_id)
 
+    if not message_text and not lead:
+        return ChatResponse(session_id=session_id, messages=_initial_messages(requested_lang), language=requested_lang)
+
     if not lead:
-        lead = lead_service.create_lead(
-            name="Customer",
-            messenger_id=sender_id,
-            platform="web",
-            email=None,
-            source="web_chat",
-        )
-        lead.conversation_state = "welcome"
+        lead = _create_web_lead(lead_service, sender_id, requested_lang)
+        _persist_initial_messages(lead, conversation_service, sender_id)
+    elif lead.language != requested_lang:
         lead.language = requested_lang
-        lead_service.db.commit()
-    else:
-        if lead.language != requested_lang:
-            lead.language = requested_lang
-            lead_service.db.commit()
+
+    lang = _lang(lead)
 
     if not message_text:
-        convs = (
-            db.query(Conversation)
-            .filter(
-                Conversation.lead_id == lead.id,
-                Conversation.channel == ConversationChannel.WEB,
+        conversations = _load_web_conversations(db, lead.id)
+        if conversations:
+            if _should_send_booking_follow_up(lead, conversations):
+                follow_up_en, follow_up_sv = _follow_up_booking_both(lead)
+                follow_up = _save_outbound_message(
+                    conversation_service,
+                    lead.id,
+                    sender_id,
+                    follow_up_en,
+                    follow_up_sv,
+                    commit=False,
+                )
+                lead.conversation_state = "recommending_booking"
+                lead.notes = "waiting_for_calendar_booking"
+                db.commit()
+                conversations.append(follow_up)
+            elif db.is_modified(lead):
+                db.commit()
+            return ChatResponse(
+                session_id=session_id,
+                messages=[],
+                history=_history_from_conversations(conversations),
+                language=lead.language or "en",
             )
-            .order_by(Conversation.created_at.asc())
-            .all()
-        )
-        if convs:
-            history = []
-            for c in convs:
-                te = c.message_text_en or c.message_text_sv
-                ts = c.message_text_sv
-                history.append(ChatMessageHistory(
-                    role="user" if c.direction == MessageDirection.INBOUND else "bot",
-                    text=te,
-                    text_en=te,
-                    text_sv=ts,
-                ))
-            return ChatResponse(session_id=session_id, messages=[], history=history, language=lead.language or "en")
 
-        welcome_en = chat_handler.get_welcome_message(language="en")
-        welcome_sv = chat_handler.get_welcome_message(language="sv")
-        welcome = welcome_sv if _lang(lead) == "sv" else welcome_en
-        responses.append(welcome)
-        conversation_service.save_message(
-            lead_id=lead.id,
-            channel=ConversationChannel.WEB,
-            direction=MessageDirection.OUTBOUND,
-            message_text_en=welcome_en,
-            message_text_sv=welcome_sv,
-            messenger_id=sender_id,
-            commit=False,
-        )
-        status, prompt_en, prompt_sv = _next_profile_prompt(lead)
-        if status != "complete":
-            prompt = prompt_sv if _lang(lead) == "sv" else prompt_en
-            responses.append(prompt)
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=ConversationChannel.WEB,
-                direction=MessageDirection.OUTBOUND,
-                message_text_en=prompt_en,
-                message_text_sv=prompt_sv,
-                messenger_id=sender_id,
-                commit=False,
-            )
-            lead.notes = f"profile_status:{status}"
-            lead.conversation_state = "gathering_profile"
-        else:
-            lead.conversation_state = "profile_complete"
-            lead.notes = "waiting_for_calendar_booking"
-            book_en, book_sv = _recommend_booking_both(lead)
-            responses.append(book_sv if _lang(lead) == "sv" else book_en)
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=ConversationChannel.WEB,
-                direction=MessageDirection.OUTBOUND,
-                message_text_en=book_en,
-                message_text_sv=book_sv,
-                messenger_id=sender_id,
-                commit=False,
-            )
-            lead.conversation_state = "recommending_booking"
-        lead_service.db.commit()
+        responses.extend(_initial_messages(lang))
+        db.commit()
         return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")
 
-    lang_lead = _lang(lead)
-    if lead.notes and lead.notes.startswith("profile_status:"):
-        user_en = user_sv = message_text
-    else:
-        user_en = message_text if lang_lead == "en" else (translate_user_message(message_text, "sv", "en") or message_text)
-        user_sv = message_text if lang_lead == "sv" else (translate_user_message(message_text, "en", "sv") or message_text)
+    user_en, user_sv = _prepare_inbound_texts(lead, message_text)
     conversation_service.save_message(
         lead_id=lead.id,
         channel=ConversationChannel.WEB,
@@ -205,195 +444,107 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         message_text_sv=user_sv,
         messenger_id=sender_id,
         commit=False,
+        flush=False,
+        refresh=False,
     )
-    lead_service.increment_message_count(lead.id, commit=False)
+    lead.message_count += 1
+    lead.last_contact = datetime.utcnow()
 
-    if not lead.conversation_state or lead.conversation_state == "welcome":
-        status, prompt_en, prompt_sv = _next_profile_prompt(lead)
-        if status != "complete":
-            prompt = prompt_sv if lang_lead == "sv" else prompt_en
-            responses.append(prompt)
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=ConversationChannel.WEB,
-                direction=MessageDirection.OUTBOUND,
-                message_text_en=prompt_en,
-                message_text_sv=prompt_sv,
-                messenger_id=sender_id,
-                commit=False,
-            )
-            lead.notes = f"profile_status:{status}"
-            lead.conversation_state = "gathering_profile"
-        else:
-            lead.conversation_state = "profile_complete"
-            lead.notes = "waiting_for_calendar_booking"
-            book_en, book_sv = _recommend_booking_both(lead)
-            responses.append(book_sv if lang_lead == "sv" else book_en)
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=ConversationChannel.WEB,
-                direction=MessageDirection.OUTBOUND,
-                message_text_en=book_en,
-                message_text_sv=book_sv,
-                messenger_id=sender_id,
-                commit=False,
-            )
-            lead.conversation_state = "recommending_booking"
-        lead_service.db.commit()
+    status = _profile_status(lead)
+    current_state = lead.conversation_state or "welcome"
+
+    if status:
+        _update_profile_from_message(lead, message_text)
+        _respond_for_profile_flow(lead, conversation_service, sender_id, lang, responses)
+        db.commit()
         return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")
 
-    if lead.notes and lead.notes.startswith("profile_status:"):
-        status = lead.notes.split(":")[1]
-        if status == "waiting_for_name" and message_text.strip():
-            lead.name = message_text.strip()
-        elif status == "waiting_for_email" and "@" in message_text:
-            lead.email = message_text.strip()
-        elif status == "waiting_for_phone":
-            phone = message_text.strip().replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
-            if phone and (phone.isdigit() or phone.startswith("+")):
-                lead.phone = phone
-
-        next_status, prompt_en, prompt_sv = _next_profile_prompt(lead)
-        if next_status != "complete":
-            lead.notes = f"profile_status:{next_status}"
-            prompt = prompt_sv if lang_lead == "sv" else prompt_en
-            responses.append(prompt)
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=ConversationChannel.WEB,
-                direction=MessageDirection.OUTBOUND,
-                message_text_en=prompt_en,
-                message_text_sv=prompt_sv,
-                messenger_id=sender_id,
-                commit=False,
-            )
-        else:
-            lead.conversation_state = "profile_complete"
-            lead.notes = "waiting_for_calendar_booking"
-            book_en, book_sv = _recommend_booking_both(lead)
-            responses.append(book_sv if lang_lead == "sv" else book_en)
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=ConversationChannel.WEB,
-                direction=MessageDirection.OUTBOUND,
-                message_text_en=book_en,
-                message_text_sv=book_sv,
-                messenger_id=sender_id,
-                commit=False,
-            )
-            lead.conversation_state = "recommending_booking"
-        lead_service.db.commit()
+    if current_state in {"welcome", "gathering_profile"}:
+        _respond_for_profile_flow(lead, conversation_service, sender_id, lang, responses)
+        db.commit()
         return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")
 
-    if lead.notes == "waiting_for_calendar_booking" and any(
-        w in message_text.lower() for w in ["booked", "done", "yes", "confirmed", "scheduled"]
-    ):
+    if lead.notes == "waiting_for_calendar_booking" and _is_calendar_confirmation(message_text):
         confirm_en = t("en", "booking_confirm_calendar")
         confirm_sv = t("sv", "booking_confirm_calendar")
-        responses.append(confirm_sv if lang_lead == "sv" else confirm_en)
-        conversation_service.save_message(
-            lead_id=lead.id,
-            channel=ConversationChannel.WEB,
-            direction=MessageDirection.OUTBOUND,
-            message_text_en=confirm_en,
-            message_text_sv=confirm_sv,
-            messenger_id=sender_id,
+        _append_bot_message(
+            responses,
+            conversation_service,
+            lead,
+            sender_id,
+            lang,
+            confirm_en,
+            confirm_sv,
             commit=False,
         )
         lead.notes = "calendar_booking_pending_verification"
-        lead_service.db.commit()
+        db.commit()
         return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")
 
-    current_state = lead.conversation_state or "welcome"
-    if current_state == "gathering_profile" or (lead.notes and lead.notes.startswith("profile_status:")):
-        lead_service.db.commit()
-        fallback = t(_lang(lead), "enter_info_above")
-        return ChatResponse(session_id=session_id, messages=responses if responses else [fallback], language=lead.language or "en")
-
-    conversation_history = conversation_service.get_conversation_history_for_ai(
-        lead_id=lead.id,
-        messenger_id=sender_id,
-        lang=lang_lead,
-    )
-    ai_response = await chat_handler.process_message(
+    analysis = await chat_handler.analyze_message(
         user_message=message_text,
-        conversation_history=conversation_history,
-        customer_info={"name": lead.name, "phone": lead.phone},
         conversation_state=current_state,
-        language=_lang(lead),
+        language=lang,
     )
-
-    if ai_response.get("should_proceed"):
-        intent = ai_response.get("intent")
-        link = _get_calendar_link()
-        if current_state == "profile_complete":
-            lead.conversation_state = "recommending_booking"
-            lead.notes = "waiting_for_calendar_booking"
-            resp_en, resp_sv = _recommend_booking_both(lead)
-        elif intent == "book" and current_state == "recommending_booking":
-            resp_en = t("en", "book_link_once", link=link)
-            resp_sv = t("sv", "book_link_once", link=link)
-            lead.notes = "waiting_for_calendar_booking"
-            lead.conversation_state = "recommending_booking"
-        else:
-            resp_en = ai_response.get("response_en") or ai_response.get("response", "")
-            resp_sv = ai_response.get("response_sv")
-        response_text = (resp_sv if lang_lead == "sv" else resp_en) or resp_en or ai_response.get("response", "")
-        responses.append(response_text)
-        conv = conversation_service.save_message(
+    if analysis.fast_path_response:
+        ai_response = analysis.fast_path_response
+    else:
+        conversation_history = conversation_service.get_conversation_history_for_ai(
             lead_id=lead.id,
-            channel=ConversationChannel.WEB,
-            direction=MessageDirection.OUTBOUND,
-            message_text_en=resp_en,
-            message_text_sv=resp_sv,
             messenger_id=sender_id,
-            intent=ai_response.get("intent"),
-            ai_response=response_text,
-            faq_used="true" if ai_response.get("faq_used") else None,
+            lang=lang,
         )
-        if resp_en and not resp_sv:
-            background_tasks.add_task(_fill_sv_background, conv.id, resp_en)
-        lead_service.db.commit()
+        ai_response = await chat_handler.process_message(
+            user_message=message_text,
+            conversation_history=conversation_history,
+            customer_info={"name": lead.name, "phone": lead.phone},
+            conversation_state=current_state,
+            language=lang,
+            analysis=analysis,
+        )
+
+    if ai_response.get("should_proceed") and ai_response.get("intent") == "book":
+        resp_en = t("en", "book_link_once", link=_get_calendar_link())
+        resp_sv = t("sv", "book_link_once", link=_get_calendar_link())
+        lead.notes = "waiting_for_calendar_booking"
+        lead.conversation_state = "recommending_booking"
+        _append_bot_message(
+            responses,
+            conversation_service,
+            lead,
+            sender_id,
+            lang,
+            resp_en,
+            resp_sv,
+            background_tasks,
+            intent=ai_response.get("intent"),
+            faq_used=ai_response.get("faq_used"),
+            commit=False,
+        )
+        db.commit()
         return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")
 
     resp_en = ai_response.get("response_en") or ai_response.get("response", "")
     resp_sv = ai_response.get("response_sv")
-    if lang_lead == "sv":
-        response_text = resp_sv or resp_en or ai_response.get("response", "")
-    else:
-        response_text = resp_en or ai_response.get("response", "")
-    if ai_response.get("next_state") and ai_response["next_state"] != current_state:
-        lead.conversation_state = ai_response["next_state"]
+    resp_en, resp_sv = _sanitize_bilingual_output(resp_en, resp_sv)
 
-    calendar_keywords = ["calendar", "available", "time slot", "schedule", "appointment", "book", "booking"]
-    if any(k in message_text.lower() for k in calendar_keywords) and current_state in [
-        "profile_complete",
-        "recommending_booking",
-        "collecting_booking_details",
-    ]:
-        link = _get_calendar_link()
-        resp_en = t("en", "book_link_once", link=link)
-        resp_sv = t("sv", "book_link_once", link=link)
-        response_text = resp_sv if lang_lead == "sv" else resp_en
-        lead.notes = "waiting_for_calendar_booking"
-        lead.conversation_state = "recommending_booking"
+    next_state = ai_response.get("next_state")
+    if next_state and next_state != current_state:
+        lead.conversation_state = next_state
 
-    responses.append(response_text)
-    conv = conversation_service.save_message(
-        lead_id=lead.id,
-        channel=ConversationChannel.WEB,
-        direction=MessageDirection.OUTBOUND,
-        message_text_en=resp_en,
-        message_text_sv=resp_sv,
-        messenger_id=sender_id,
+    _append_bot_message(
+        responses,
+        conversation_service,
+        lead,
+        sender_id,
+        lang,
+        resp_en,
+        resp_sv,
+        background_tasks,
         intent=ai_response.get("intent"),
-        ai_response=response_text,
-        faq_used="true" if ai_response.get("faq_used") else None,
+        faq_used=ai_response.get("faq_used"),
         commit=False,
     )
-    if resp_en and not resp_sv:
-        background_tasks.add_task(_fill_sv_background, conv.id, resp_en)
-    lead_service.increment_message_count(lead.id, commit=False)
-    lead_service.db.commit()
+    db.commit()
 
     return ChatResponse(session_id=session_id, messages=responses, language=lead.language or "en")

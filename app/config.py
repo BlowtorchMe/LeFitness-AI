@@ -1,8 +1,10 @@
 """
 Configuration management for the application
 """
+from typing import Any, Optional
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -48,6 +50,17 @@ class Settings(BaseSettings):
     # Testing/Mock Mode
     use_mock_apis: bool = False  # Set to True to use mock APIs instead of real ones
     test_mode: bool = False  # Enable test mode features
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def parse_debug(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"release", "production", "prod"}:
+                return False
+            if normalized in {"development", "dev", "debug"}:
+                return True
+        return value
     
     class Config:
         env_file = ".env"
@@ -60,4 +73,3 @@ class Settings(BaseSettings):
 # Global settings instance
 # Pydantic will use environment variables and defaults
 settings = Settings()
-

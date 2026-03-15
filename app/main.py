@@ -1,22 +1,41 @@
 """
 Main FastAPI application entry point
 """
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from app.config import settings
-from app.webhooks import meta_webhook, calendar_webhook
-from app.api import leads, bookings, chat, faq
-from app.services.calendar_webhook_service import calendar_webhook_service
+import logging
+import threading
+import time
+import uvicorn
 from contextlib import asynccontextmanager
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-import logging
-import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.ai.chat_handler import ChatHandler
+from app.ai.faq_handler import FAQHandler
+from app.api import leads, bookings, chat, faq
+from app.config import settings
+from app.services.calendar_webhook_service import calendar_webhook_service
+from app.webhooks import meta_webhook, calendar_webhook
 
 logger = logging.getLogger(__name__)
 
 # Global scheduler instance
 scheduler = AsyncIOScheduler()
+faq_handler = FAQHandler()
+chat_handler = ChatHandler()
+
+
+def _warmup_faq_background():
+    """Warm AI components without delaying startup."""
+    try:
+        time.sleep(3)
+        faq_handler.warmup()
+        chat_handler.warmup()
+    except Exception:
+        logger.exception("FAQ warmup failed")
+
 
 def renew_webhook_job():
     """Job function to renew calendar webhook (called by scheduler)"""
@@ -32,6 +51,7 @@ async def lifespan(app: FastAPI):
     """Lifecycle events for the app"""
     # Startup: Set up calendar webhook and scheduler
     logger.info("Starting up...")
+    threading.Thread(target=_warmup_faq_background, daemon=True).start()
     
     if settings.google_calendar_id and settings.google_service_account and settings.google_calendar_webhook_url:
         result = calendar_webhook_service.setup_webhook()
@@ -54,7 +74,8 @@ async def lifespan(app: FastAPI):
     
     # Shutdown: Stop scheduler and webhook
     logger.info("Shutting down...")
-    scheduler.shutdown()
+    if scheduler.running:
+        scheduler.shutdown()
     if calendar_webhook_service.channel_id:
         calendar_webhook_service.stop_webhook()
 
@@ -101,4 +122,3 @@ async def health():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

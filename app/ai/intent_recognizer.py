@@ -1,75 +1,79 @@
 """
-Intent recognition for customer messages
+Minimal intent recognition for explicit control-flow decisions only.
+
+Everything else should flow through the main LLM answer path instead of being
+over-classified here.
 """
-from typing import Dict, List
 import re
+from typing import Dict
 
 
 class IntentRecognizer:
-    """Recognizes customer intent from messages"""
-    
+    """Recognizes only high-signal intents that change the workflow."""
+
     INTENT_PATTERNS = {
         "book": [
-            r"book", r"appointment", r"schedule", r"reserve", r"visit",
-            r"come in", r"tour", r"trial", r"free period"
+            r"\bi\s+want\s+to\s+book\b",
+            r"\blet'?s\s+book\b",
+            r"\bbook\s+(my|the|a|an)\b",
+            r"\bmake\s+an?\s+appointment\b",
+            r"\bschedule\s+(an?\s+)?(appointment|visit|trial)\b",
+            r"\breserve\s+(a|an|my)\b",
+            r"\bavailable\s+times?\b",
+            r"\btime\s+slots?\b",
+            r"\bwhen\s+can\s+i\s+come\b",
+            r"\bbook\s+now\b",
         ],
         "cancel": [
-            r"cancel", r"cancel", r"reschedule", r"change", r"postpone",
-            r"can't make it", r"won't be able"
-        ],
-        "question": [
-            r"what", r"when", r"where", r"how", r"why", r"can\s+i", r"can\s+we", r"could\s+i",
-            r"hours", r"price", r"cost", r"parking", r"equipment", r"rules",
-            r"kid", r"child", r"children", r"bring"
+            r"\bcancel\b",
+            r"\breschedule\b",
+            r"\bpostpone\b",
+            r"\bcan'?t\s+make\s+it\b",
+            r"\bwon'?t\s+be\s+able\b",
         ],
         "greeting": [
-            r"hi", r"hello", r"hey", r"good morning", r"good afternoon"
+            r"\bhi\b", r"\bhello\b", r"\bhey\b", r"\bgood morning\b", r"\bgood afternoon\b",
         ],
         "goodbye": [
-            r"bye", r"goodbye", r"thanks", r"thank you", r"see you"
+            r"\bbye\b", r"\bgoodbye\b", r"\bthanks\b", r"\bthank you\b", r"\bsee you\b",
+        ],
+        "overview": [
+            r"\blearn\s+more\b",
+            r"\bknow\s+more\b",
+            r"\btell\s+me\s+more\b",
+            r"\bask\s+(some|a\s+few)?\s*questions\b",
+            r"\bhave\s+(some|a\s+few)\s+questions\b",
+            r"\bquestions?\s+before\s+booking\b",
+            r"\bbefore\s+booking\b.*\bquestions?\b",
+            r"\bmore\s+about\s+(your|the)\s+(service|services|gym)\b",
+            r"\bwhat\s+do\s+you\s+offer\b",
+            r"\bwhat\s+services\s+do\s+you\s+have\b",
+            r"\bwhat\s+kind\s+of\s+(services|training|classes)\b",
         ],
         "frustrated": [
-            r"angry", r"frustrated", r"disappointed", r"upset", r"problem",
-            r"issue", r"complaint"
-        ]
+            r"\bangry\b", r"\bfrustrated\b", r"\bdisappointed\b", r"\bupset\b",
+            r"\bproblem\b", r"\bissue\b", r"\bcomplaint\b",
+        ],
     }
-    
+
     async def recognize(self, message: str) -> str:
-        """
-        Recognize intent from customer message
-        
-        Args:
-            message: Customer message text
-        
-        Returns:
-            Intent string (book, cancel, question, greeting, goodbye, frustrated, unknown)
-        """
+        """Return explicit intent or 'unknown' for normal conversation."""
         message_lower = message.lower()
-        
-        # Check each intent pattern
         intent_scores: Dict[str, int] = {}
-        
+
         for intent, patterns in self.INTENT_PATTERNS.items():
-            score = 0
-            for pattern in patterns:
-                if re.search(pattern, message_lower):
-                    score += 1
+            score = sum(1 for pattern in patterns if re.search(pattern, message_lower))
             if score > 0:
                 intent_scores[intent] = score
-        
-        # Return intent with highest score, or "unknown"
+
         if intent_scores:
             return max(intent_scores, key=intent_scores.get)
-        
         return "unknown"
-    
+
     def get_confidence(self, message: str, intent: str) -> float:
-        """Get confidence score for recognized intent"""
+        """Get confidence score for recognized intent."""
         message_lower = message.lower()
         patterns = self.INTENT_PATTERNS.get(intent, [])
-        
         matches = sum(1 for pattern in patterns if re.search(pattern, message_lower))
         total_patterns = len(patterns)
-        
         return matches / total_patterns if total_patterns > 0 else 0.0
-

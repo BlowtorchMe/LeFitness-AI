@@ -3,7 +3,6 @@ Conversation state management for guiding users through the booking flow
 """
 from enum import Enum
 from typing import Optional, Dict
-from datetime import datetime
 
 from app.config import settings
 
@@ -45,9 +44,9 @@ class ConversationFlowManager:
             
             ConversationState.GATHERING_PROFILE: """You are currently gathering the customer's profile information. Be friendly and explain why you need this information (to send booking confirmation, reminders, etc.). Ask for one piece of information at a time.""",
             
-            ConversationState.PROFILE_COMPLETE: f"""Great! You have the customer's profile information. Now proactively recommend booking their free {settings.free_trial_days}-day trial period. Be enthusiastic and highlight the benefits. Guide them toward booking.""",
+            ConversationState.PROFILE_COMPLETE: f"""You have the customer's profile information. If they ask a question, answer it clearly. If they want to book, guide them to the appointment schedule link for their free {settings.free_trial_days}-day trial. Do not force booking into every reply.""",
             
-            ConversationState.RECOMMENDING_BOOKING: f"""You are recommending the free trial. Be persuasive but not pushy. Highlight benefits like: full gym access, equipment, group training, gym tour. The user has been provided with an appointment schedule link - remind them to use that link to book. DO NOT suggest specific time slots.""",
+            ConversationState.RECOMMENDING_BOOKING: f"""You are recommending the free trial. Be helpful and light-touch. Highlight benefits like full gym access, equipment, group training, and a gym tour. The user has been provided with an appointment schedule link, so remind them to use that link if they want to book. DO NOT suggest specific time slots.""",
             
             ConversationState.COLLECTING_BOOKING_DETAILS: """The user has been provided with an appointment schedule link. DO NOT suggest specific time slots. Instead, remind them to use the appointment schedule link that was already sent to book at a time that works for them. Once they book via the calendar, the system will automatically detect it.""",
             
@@ -55,7 +54,7 @@ class ConversationFlowManager:
             
             ConversationState.BOOKING_CONFIRMED: """The booking has been confirmed! Congratulate them, remind them about the appointment, and let them know they'll receive a confirmation email and reminder. Be warm and welcoming.""",
             
-            ConversationState.ANSWERING_QUESTIONS: """The customer is asking questions. Answer helpfully, but always try to guide the conversation back toward booking their free trial. Be solution-oriented.""",
+            ConversationState.ANSWERING_QUESTIONS: """The customer is asking questions. Answer them clearly and completely. Only bring up booking if they ask about trying the gym, visiting, or next steps.""",
         }
         
         return prompts.get(state, "Continue the conversation naturally while guiding toward booking.")
@@ -77,4 +76,3 @@ class ConversationFlowManager:
             return f"Great! Our free {settings.free_trial_days}-day trial includes full access to all equipment, group training classes, and a personal gym tour. Would you like to book your appointment now?"
         
         return None
-
