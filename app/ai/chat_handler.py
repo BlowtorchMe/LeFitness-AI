@@ -1,12 +1,12 @@
 """
 Main AI conversation handler
 """
-import openai
+import openai, time
 from typing import Optional, Dict, List
+
 from app.config import settings
-from app.ai.prompts import SYSTEM_PROMPT, FAQ_CONTEXT
+from app.ai.prompts import SYSTEM_PROMPT
 from app.ai.translations import get as t
-from app.ai.faq_handler import FAQHandler
 from app.ai.intent_recognizer import IntentRecognizer
 from app.ai.conversation_state import ConversationState, ConversationFlowManager
 
@@ -15,15 +15,15 @@ class ChatHandler:
     """Handles AI conversations with customers"""
 
     def __init__(self):
-        # Initialize OpenAI client only if API key is available
         self.client = None
         if settings.openai_api_key:
             try:
                 self.client = openai.OpenAI(api_key=settings.openai_api_key)
             except Exception:
-                pass  # Will fail gracefully on first API call
-        self.faq_handler = FAQHandler() # söker i pgvector-FAQ
-        self.intent_recognizer = IntentRecognizer() # försöker förstå intent
+                pass
+        print("Using OpenAI model:", settings.openai_model)
+
+        self.intent_recognizer = IntentRecognizer()
         self.flow_manager = ConversationFlowManager()
 
     async def process_message(
@@ -34,46 +34,22 @@ class ChatHandler:
         conversation_state: Optional[str] = None,
         language: str = "en",
     ) -> Dict[str, any]:
-        """
-        Process a user message and generate an AI response
-        The agent proactively guides the conversation through the booking flow
-        """
+        total_start = time.perf_counter()
+        print("ChatHandler.process_message was called")
 
-        # Recognize intent
+        intent_start = time.perf_counter()
         intent = await self.intent_recognizer.recognize(user_message)
+        print("intent_recognizer took", (time.perf_counter() - intent_start) * 1000, "ms")
 
-        # Determine current state
-        current_state = ConversationState(conversation_state) if conversation_state else ConversationState.WELCOME
+        current_state = (
+            ConversationState(conversation_state)
+            if conversation_state
+            else ConversationState.WELCOME
+        )
 
-        # --- FAQ FIRST (FAST PATH) ---
-        faq_answer = await self.faq_handler.get_answer(user_message)
-
-        # ✅ If FAQ matched, return it immediately (don’t force booking flow)
-        if faq_answer:
-            answer_text = faq_answer.get("answer")
-            video_link = faq_answer.get("video_link")  # important: matches your faq_handler return key
-
-            # Keep response format simple: response + messages list (like your API already returns)
-            # If your frontend expects "messages": [...], keep that.
-            return {
-                "response": answer_text,
-                "response_en": answer_text,
-                "response_sv": answer_text,
-                "intent": "faq",
-                "current_state": current_state.value,
-                "next_state": current_state.value,
-                "faq_used": True,
-                "needs_human": False,
-                "should_proceed": False,
-                "faq_video_url": video_link,
-            }
-
-        # Get state-specific prompt
         state_prompt = self.flow_manager.get_state_prompt(current_state, customer_info or {})
 
-        # Build conversation context
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
         messages.append({
             "role": "system",
             "content": f"""You must reply with BOTH English and Swedish. Output exactly:
@@ -99,48 +75,42 @@ IMPORTANT: You are actively leading this conversation. Your goal is to guide the
 Be proactive! Don't just answer questions - guide them toward booking. If they ask questions, answer briefly then guide back to booking."""
         })
 
-        # Add FAQ context (will be empty here since we early-returned on faq match)
-        # Leaving structure intact in case you later want “soft-FAQ” behaviour.
-        if faq_answer:
-            messages.append({
-                "role": "system",
-                "content": f"FAQ Context: {FAQ_CONTEXT}\n\nRelevant FAQ: {faq_answer.get('answer')}"
-            })
-
-        # Add customer info if available
         if customer_info:
-            customer_context = f"Customer info: {customer_info}"
-            messages.append({"role": "system", "content": customer_context})
+            messages.append({"role": "system", "content": f"Customer info: {customer_info}"})
 
-        # Add conversation history
         if conversation_history:
             messages.extend(conversation_history)
 
-        # Add current user message
         messages.append({"role": "user", "content": user_message})
 
         if not self.client:
             err = "I'm sorry, the AI service is not configured. Please contact support."
+            print("ChatHandler.process_message total took", (time.perf_counter() - total_start) * 1000, "ms")
             return {
                 "response": err,
                 "response_en": err,
                 "response_sv": None,
                 "intent": "error",
-                "next_state": conversation_state
+                "next_state": conversation_state,
             }
 
         try:
+            openai_start = time.perf_counter()
             response = self.client.chat.completions.create(
                 model=settings.openai_model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=600
+                max_tokens=600,
             )
+            print("OpenAI chat.completions.create took", (time.perf_counter() - openai_start) * 1000, "ms")
+
             raw = response.choices[0].message.content
             response_en, response_sv = self._parse_bilingual_response(raw)
             single = response_en or response_sv or raw
+
             next_state = self._determine_next_state(current_state, intent, user_message, customer_info)
 
+            print("ChatHandler.process_message total took", (time.perf_counter() - total_start) * 1000, "ms")
             return {
                 "response": single,
                 "response_en": response_en,
@@ -148,13 +118,14 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 "intent": intent,
                 "current_state": current_state.value,
                 "next_state": next_state.value if next_state else current_state.value,
-                "faq_used": False,  # important: FAQ not used here
+                "faq_used": False,
                 "needs_human": self._should_escalate(user_message, single),
                 "should_proceed": self._should_proceed_to_next_state(current_state, intent),
                 "faq_video_url": None,
             }
 
         except Exception as e:
+            print("ChatHandler.process_message failed:", str(e))
             fallback = f"I apologize, but I'm having trouble right now. Please call us at {settings.gym_phone} and we'll be happy to help!"
             return {
                 "response": fallback,
@@ -165,7 +136,7 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
                 "next_state": current_state.value,
                 "faq_used": False,
                 "needs_human": True,
-                "error": str(e)
+                "error": str(e),
             }
 
     def _determine_next_state(
@@ -173,33 +144,31 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
         current_state: ConversationState,
         intent: str,
         user_message: str,
-        customer_info: Optional[Dict]
+        customer_info: Optional[Dict],
     ) -> Optional[ConversationState]:
-        """Determine next state based on current state and user intent"""
-
-        # If booking intent detected, move to collecting details
-        if intent == "book" and current_state in [ConversationState.PROFILE_COMPLETE, ConversationState.RECOMMENDING_BOOKING]:
+        if intent == "book" and current_state in [
+            ConversationState.PROFILE_COMPLETE,
+            ConversationState.RECOMMENDING_BOOKING,
+        ]:
             return ConversationState.COLLECTING_BOOKING_DETAILS
 
-        # If user provides date/time, move to confirmation
         if current_state == ConversationState.COLLECTING_BOOKING_DETAILS:
-            time_indicators = ["tomorrow", "today", "monday", "tuesday", "wednesday", "thursday", "friday",
-                               "saturday", "sunday", "am", "pm", ":", "at"]
+            time_indicators = [
+                "tomorrow", "today", "monday", "tuesday", "wednesday",
+                "thursday", "friday", "saturday", "sunday", "am", "pm", ":", "at",
+            ]
             if any(indicator in user_message.lower() for indicator in time_indicators):
                 return ConversationState.CONFIRMING_BOOKING
 
-        # If user confirms, move to booking confirmed
         if current_state == ConversationState.CONFIRMING_BOOKING and intent in ["book", "greeting"]:
             return ConversationState.BOOKING_CONFIRMED
 
-        # If profile complete and user asks questions, still recommend booking
         if current_state == ConversationState.PROFILE_COMPLETE and intent == "question":
             return ConversationState.RECOMMENDING_BOOKING
 
         return self.flow_manager.get_next_state(current_state)
 
     def _should_proceed_to_next_state(self, current_state: ConversationState, intent: str) -> bool:
-        """Determine if we should proactively move to next state"""
         if current_state == ConversationState.PROFILE_COMPLETE:
             return True
         if current_state == ConversationState.RECOMMENDING_BOOKING and intent == "book":
@@ -210,15 +179,18 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
         if not text_en or not self.client:
             return None
         try:
+            translate_start = time.perf_counter()
             r = self.client.chat.completions.create(
                 model=settings.openai_model,
                 messages=[
                     {"role": "system", "content": "Reply with only the Swedish translation. No other text, no explanation."},
-                    {"role": "user", "content": f"Translate to Swedish:\n\n{text_en}"}
+                    {"role": "user", "content": f"Translate to Swedish:\n\n{text_en}"},
                 ],
                 temperature=0.3,
-                max_tokens=500
+                max_tokens=500,
             )
+            print("_get_swedish_from_ai OpenAI call took", (time.perf_counter() - translate_start) * 1000, "ms")
+
             out = (r.choices[0].message.content or "").strip()
             return out if out else None
         except Exception:
@@ -226,34 +198,35 @@ Be proactive! Don't just answer questions - guide them toward booking. If they a
 
     @staticmethod
     def _parse_bilingual_response(raw: str) -> tuple:
-        """Parse ---EN--- / ---SV--- blocks. Returns (response_en, response_sv)."""
         if not raw or not isinstance(raw, str):
             return (None, None)
+
         raw = raw.strip()
         en, sv = None, None
+
         if "---EN---" in raw and "---SV---" in raw:
             parts = raw.split("---EN---", 1)
             if len(parts) == 2:
                 rest = parts[1].split("---SV---", 1)
                 en = (rest[0].strip() or None) if rest else None
                 sv = (rest[1].strip() or None) if len(rest) > 1 else None
+
         if not en and not sv and raw:
             en = raw
+
         return (en, sv)
 
     def _should_escalate(self, user_message: str, ai_response: str) -> bool:
-        """Determine if conversation should be escalated to human"""
         uncertainty_phrases = [
             "I'm not sure",
             "I don't know",
             "I'm uncertain",
             "I cannot",
-            "I'm unable"
+            "I'm unable",
         ]
         return any(phrase.lower() in ai_response.lower() for phrase in uncertainty_phrases)
 
     def get_welcome_message(self, language: str = "en", customer_name: Optional[str] = None) -> str:
-        """Generate welcome message in the given language."""
         if customer_name:
             return t(language, "welcome_hi", name=customer_name)
         return t(language, "welcome")

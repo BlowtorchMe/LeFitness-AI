@@ -2,7 +2,7 @@
 Web chat API - allows chat from a web page instead of Messenger/Instagram
 Same flow as Messenger/Instagram: welcome, profile (name, email, phone), then booking link.
 """
-import uuid
+import uuid, time
 from datetime import datetime
 from typing import Optional, List
 
@@ -157,6 +157,9 @@ class ChatOutgoingMessage(BaseModel):
 @router.post("", response_model=ChatResponse)
 @router.post("/", response_model=ChatResponse)
 async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    total_start = time.perf_counter()
+    print("chat endpoint started")
+
     session_id = request.session_id or uuid.uuid4().hex
     sender_id = session_id
     message_text = (request.message or "").strip()
@@ -168,9 +171,11 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
 
     responses: List[str] = []
 
+    services_start = time.perf_counter()
     lead_service = LeadService(db)
     conversation_service = ConversationService(db)
     lead = lead_service.get_lead_by_messenger_id(sender_id)
+    print("lead/service setup + get_lead_by_messenger_id took", (time.perf_counter() - services_start) * 1000, "ms")
 
     if not lead:
         lead = lead_service.create_lead(
@@ -182,7 +187,10 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         )
         lead.conversation_state = "welcome"
         lead.language = requested_lang
+
+        commit_start = time.perf_counter()
         lead_service.db.commit()
+        print("db commit took", (time.perf_counter() - commit_start) * 1000, "ms")
     else:
         if lead.language != requested_lang:
             lead.language = requested_lang
@@ -272,12 +280,9 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         )
 
     lang_lead = _lang(lead)
-    if lead.notes and lead.notes.startswith("profile_status:"):
-        user_en = user_sv = message_text
-    else:
-        user_en = message_text if lang_lead == "en" else (translate_user_message(message_text, "sv", "en") or message_text)
-        user_sv = message_text if lang_lead == "sv" else (translate_user_message(message_text, "en", "sv") or message_text)
-
+    # FIX: GPT-4 handles multilingual input natively — no need to pre-translate (~700ms saved)
+    user_en = user_sv = message_text
+    save_inbound_start = time.perf_counter()
     conversation_service.save_message(
         lead_id=lead.id,
         channel=ConversationChannel.WEB,
@@ -288,9 +293,12 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         commit=False,
     )
     lead_service.increment_message_count(lead.id, commit=False)
-
+    print("save inbound message + increment_message_count took", (time.perf_counter() - save_inbound_start) * 1000,
+          "ms")
     # QR-entry: hoppa över onboarding direkt
+    machine_lookup_start = time.perf_counter()
     machine = _get_machine_from_message(message_text)
+    print("_get_machine_from_message took", (time.perf_counter() - machine_lookup_start) * 1000, "ms")
     if machine and machine_entry:
         response_text = machine["description_sv"] if lang_lead == "sv" else machine["description_en"]
         responses.append(response_text)
@@ -466,16 +474,18 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             messages=responses if responses else [fallback],
             language=lead.language or "en",
         )
-
+    faq_start = time.perf_counter()
     faq = await faq_handler.get_answer(message_text)
+    print("chat.py faq_handler.get_answer took", (time.perf_counter() - faq_start) * 1000, "ms")
     if faq:
         answer_en = (faq.get("answer") or "").strip()
         video = faq.get("video_link")
 
         answer_sv = None
         if answer_en and lang_lead == "sv":
+            faq_translate_start = time.perf_counter()
             answer_sv = translate_user_message(answer_en, "en", "sv") or answer_en
-
+            print("translate FAQ answer en->sv took", (time.perf_counter() - faq_translate_start) * 1000, "ms")
         response_text = answer_sv if (lang_lead == "sv" and answer_sv) else answer_en
         if not response_text:
             response_text = answer_en or "Sorry, I couldn't find an answer."
@@ -494,8 +504,6 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             faq_used="true",
             commit=False,
         )
-        if answer_en and not answer_sv:
-            background_tasks.add_task(_fill_sv_background, conv.id, answer_en)
 
         lead_service.increment_message_count(lead.id, commit=False)
         lead_service.db.commit()
@@ -506,12 +514,15 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             language=lead.language or "en",
             faq_video_url=video,
         )
-
+    history_start = time.perf_counter()
     conversation_history = conversation_service.get_conversation_history_for_ai(
         lead_id=lead.id,
         messenger_id=sender_id,
         lang=lang_lead,
     )
+    print("get_conversation_history_for_ai took", (time.perf_counter() - history_start) * 1000, "ms")
+
+    ai_start = time.perf_counter()
     ai_response = await chat_handler.process_message(
         user_message=message_text,
         conversation_history=conversation_history,
@@ -519,6 +530,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         conversation_state=current_state,
         language=_lang(lead),
     )
+    print("chat_handler.process_message took", (time.perf_counter() - ai_start) * 1000, "ms")
 
     if ai_response.get("should_proceed"):
         intent = ai_response.get("intent")
@@ -550,8 +562,6 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             ai_response=response_text,
             faq_used="true" if ai_response.get("faq_used") else None,
         )
-        if resp_en and not resp_sv:
-            background_tasks.add_task(_fill_sv_background, conv.id, resp_en)
 
         lead_service.db.commit()
         return ChatResponse(
@@ -599,8 +609,6 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         faq_used="true" if ai_response.get("faq_used") else None,
         commit=False,
     )
-    if resp_en and not resp_sv:
-        background_tasks.add_task(_fill_sv_background, conv.id, resp_en)
 
     lead_service.increment_message_count(lead.id, commit=False)
     lead_service.db.commit()

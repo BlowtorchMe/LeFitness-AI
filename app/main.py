@@ -1,22 +1,21 @@
 """
 Main FastAPI application entry point
 """
-import logging
 import os
+import time
+import uvicorn
 from contextlib import asynccontextmanager
 
-import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import leads, bookings, chat, faq
 from app.config import settings
+from app.database.database import ensure_db
 from app.services.calendar_webhook_service import calendar_webhook_service
 from app.webhooks import meta_webhook, calendar_webhook
-
-logger = logging.getLogger(__name__)
 
 IS_VERCEL = os.getenv("VERCEL") == "1"
 
@@ -37,21 +36,55 @@ scheduler = AsyncIOScheduler()
 
 def renew_webhook_job():
     """Job function to renew calendar webhook (called by scheduler)"""
-    logger.info("Renewing calendar webhook (scheduled job)...")
+    print("Renewing calendar webhook (scheduled job)...")
     result = calendar_webhook_service.renew_webhook()
     if result.get("success"):
-        logger.info("✅ Calendar webhook renewed successfully")
+        print("Calendar webhook renewed successfully")
     else:
-        logger.error(f"Failed to renew webhook: {result.get('error')}")
+        print(f"Failed to renew webhook: {result.get('error')}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle events for the app"""
-    logger.info("Starting up...")
+    startup_total_start = time.perf_counter()
+    print("Starting up...")
+
+    db_start = time.perf_counter()
+    print("Running ensure_db()...")
+    ensure_db()
+    print("ensure_db() done")
+    print("ensure_db() took", (time.perf_counter() - db_start) * 1000, "ms")
+
+    # Warm up FAQ components AND the OpenAI HTTP connection at startup.
+    # _get_components() only creates the objects — the first real embedder.run()
+    # call still pays SSL/connection cost (~6000ms). We run a dummy embedding
+    # here so that cost is paid at startup, not on the first user request.
+    try:
+        import asyncio as _asyncio
+        from app.ai.faq_handler import _get_components
+
+        def _faq_warmup():
+            store, embedder, retriever = _get_components()
+            # Run a real (tiny) embedding to warm up the OpenAI HTTP connection
+            embedder.run(text="warmup")
+
+        warmup_start = time.perf_counter()
+        loop = _asyncio.get_event_loop()
+        await loop.run_in_executor(None, _faq_warmup)
+        print("FAQ warmup (incl. OpenAI connection) took", (time.perf_counter() - warmup_start) * 1000, "ms")
+    except Exception as _e:
+        print("FAQ warmup failed (non-critical):", _e)
 
     if settings.google_calendar_id and settings.google_service_account and settings.google_calendar_webhook_url:
+        calendar_start = time.perf_counter()
         result = calendar_webhook_service.setup_webhook()
+        print(
+            "calendar_webhook_service.setup_webhook took",
+            (time.perf_counter() - calendar_start) * 1000,
+            "ms"
+        )
+
         if result.get("success"):
             scheduler.add_job(
                 renew_webhook_job,
@@ -60,19 +93,25 @@ async def lifespan(app: FastAPI):
                 replace_existing=True
             )
             scheduler.start()
-            logger.info("✅ Calendar webhook set up and auto-renewal scheduled (every 6 days)")
+            print("Calendar webhook set up and auto-renewal scheduled (every 6 days)")
         else:
-            logger.warning(f"Failed to set up calendar webhook: {result.get('error')}")
+            print(f"Failed to set up calendar webhook: {result.get('error')}")
     else:
-        logger.info("Calendar webhook not configured - skipping setup")
+        print("Calendar webhook not configured - skipping setup")
+
+    print("Startup total took", (time.perf_counter() - startup_total_start) * 1000, "ms")
 
     yield
 
-    logger.info("Shutting down...")
+    shutdown_start = time.perf_counter()
+    print("Shutting down...")
+
     if scheduler.running:
         scheduler.shutdown()
     if calendar_webhook_service.channel_id:
         calendar_webhook_service.stop_webhook()
+
+    print("Shutdown total took", (time.perf_counter() - shutdown_start) * 1000, "ms")
 
 
 app = FastAPI(
@@ -82,7 +121,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+
+@app.middleware("http")
+async def log_request_timing(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    print(f"HTTP {request.method} {request.url.path} completed in {duration_ms:.2f} ms status={response.status_code}")
+    return response
+
 
 def get_allowed_origins() -> list[str]:
     raw = os.getenv(
@@ -90,6 +137,7 @@ def get_allowed_origins() -> list[str]:
         "http://localhost:5173,http://127.0.0.1:5173"
     )
     return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -99,8 +147,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # Include routers
-#kopplar in endpoints från en annan fil.
 app.include_router(meta_webhook.router, prefix="/webhooks/meta", tags=["webhooks"])
 app.include_router(calendar_webhook.router, prefix="/webhooks/calendar", tags=["webhooks"])
 app.include_router(leads.router, prefix="/api/leads", tags=["leads"])

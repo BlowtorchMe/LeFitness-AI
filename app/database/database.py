@@ -3,13 +3,12 @@ Database connection and session management
 """
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
+
 from app.config import settings
 from app.database.base import Base
-from app.models import lead, booking, conversation, faq
+from app.models import lead, booking, conversation, faq  # noqa: F401
 
 # Create database engine (PostgreSQL)
-# pool_pre_ping: check connection before use to avoid "SSL connection closed" on stale connections
-# pool_recycle: refresh connections before server idle timeout closes them
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,
@@ -21,7 +20,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db():
-    """Drop and recreate all tables and (PostgreSQL) enum types. Ensures pgvector extension for FAQ indexer."""
+    """Drop and recreate all tables and (PostgreSQL) enum types. Use with caution."""
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         conn.execute(text("DROP TABLE IF EXISTS conversations CASCADE"))
@@ -36,12 +35,27 @@ def init_db():
         conn.commit()
 
     Base.metadata.create_all(bind=engine)
+    print("init_db() finished")
+
 
 def ensure_db():
+    """
+    Safe DB initialization:
+    - tries to ensure pgvector extension
+    - creates tables if they do not already exist
+    """
     with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
+        try:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+            print("vector extension ensured")
+        except Exception as e:
+            print("Could not ensure vector extension:", str(e))
+            conn.rollback()
+
     Base.metadata.create_all(bind=engine)
+    print("Base.metadata.create_all finished")
+
 
 def get_db() -> Session:
     """Get database session"""
@@ -50,4 +64,3 @@ def get_db() -> Session:
         yield db
     finally:
         db.close()
-
