@@ -22,7 +22,8 @@ class LeadService:
         messenger_id: Optional[str] = None,
         platform: Optional[str] = None,
         source: str = "meta_ad",
-        ad_campaign: Optional[str] = None
+        ad_campaign: Optional[str] = None,
+        commit: bool = True,
     ) -> Lead:
         """Create a new lead"""
         lead = Lead(
@@ -39,8 +40,12 @@ class LeadService:
         )
         
         self.db.add(lead)
-        self.db.commit()
-        self.db.refresh(lead)
+        if commit:
+            self.db.commit()
+            self.db.refresh(lead)
+        else:
+            self.db.flush()
+            self.db.refresh(lead)
         
         return lead
     
@@ -117,4 +122,3 @@ class LeadService:
                 self.db.commit()
                 self.db.refresh(lead)
         return lead
-

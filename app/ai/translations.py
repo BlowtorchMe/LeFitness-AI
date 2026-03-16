@@ -17,8 +17,13 @@ TEXTS = {
             f"Please book your appointment at a time that works best for you using this link:\n{link}\n\n"
             "Once you've booked, I'll confirm everything for you!"
         ),
+        "booking_follow_up": lambda name, link: (
+            f"Hi {name}, just checking in. If you'd still like to try {settings.gym_name}, you can book your free {settings.free_trial_days}-day trial here:\n{link}\n\n"
+            "If you have any other questions first, just send them here."
+        ),
         "booking_confirm_calendar": "Great! I'll check the calendar and confirm your booking. You should receive a confirmation email shortly!",
         "book_link_once": lambda link: f"Great! Please use this link to book your appointment at a time that works best for you:\n{link}\n\nOnce you've booked, I'll confirm everything for you!",
+        "service_overview_prompt": "Of course. Ask anything you want. If helpful, you can ask about opening hours, prices, classes, equipment, parking, or personal training.",
     },
     "sv": {
         "welcome": lambda: f"Hej! Kul att du är intresserad av {settings.free_trial_days} dagars gratis träning hos oss på {settings.gym_name}!\n\nNär vill du komma för att aktivera din provperiod och få en rundtur i gymmet?",
@@ -33,8 +38,13 @@ TEXTS = {
             f"Boka din tid när det passar dig bäst via denna länk:\n{link}\n\n"
             "När du bokat bekräftar jag allt!"
         ),
+        "booking_follow_up": lambda name, link: (
+            f"Hej {name}, jag ville bara följa upp. Om du fortfarande vill prova {settings.gym_name} kan du boka din gratis {settings.free_trial_days}-dagars provperiod här:\n{link}\n\n"
+            "Om du vill fråga något mer först är det bara att skriva här."
+        ),
         "booking_confirm_calendar": "Bra! Jag kollar kalendern och bekräftar din bokning. Du får en bekräftelse via e-post snart!",
         "book_link_once": lambda link: f"Bra! Använd denna länk för att boka din tid när det passar dig:\n{link}\n\nNär du bokat bekräftar jag allt!",
+        "service_overview_prompt": "Självklart. Fråga vad du vill. Om det hjälper kan du fråga om öppettider, priser, klasser, utrustning, parkering eller personlig träning.",
     },
 }
 

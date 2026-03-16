@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database.database import get_db
 from app.models.faq import FAQ, FAQSchema, FAQRecord
-from app.faq_indexer import run_indexer
+from app.faq_indexer import run_indexer, upsert_faq_embedding, delete_faq_embeddings
 
 router = APIRouter()
 
@@ -63,7 +63,7 @@ async def import_faqs(
     reindex_count = 0
     reindex_error = None
     if reindex and imported:
-        result = run_indexer(recreate_table=True)
+        result = run_indexer(recreate_table=False)
         reindex_count = result.get("count", 0)
         reindex_error = result.get("error")
     return FAQImportResponse(
@@ -73,11 +73,11 @@ async def import_faqs(
         reindex_error=reindex_error,
     )
 
- # - läser FAQ-tabellen i DB sen skapas embeddings som sen skriver till pgvector
+
 @router.post("/reindex", response_model=ReindexResponse)
 async def reindex_faqs():
     """Run FAQ indexer (embed FAQs from DB into pgvector). For admin use."""
-    result = run_indexer(recreate_table=True)
+    result = run_indexer(recreate_table=False)
     return ReindexResponse(
         success=result["success"],
         count=result["count"],
@@ -89,10 +89,21 @@ async def reindex_faqs():
 async def create_faq(body: FAQSchema, db: Session = Depends(get_db)):
     """Add one FAQ. Example for admin form (add one by one)."""
     faq = FAQ(question=body.question, answer=body.answer, video_link=body.video_link)
-    db.add(faq) #lägger till i faq
-    db.commit() #sparar i DB
-    db.refresh(faq) #laddar om så att de som lagts till får ett id
-    return faq.to_record()
+    db.add(faq)
+    try:
+        db.flush()
+        sync = upsert_faq_embedding(faq)
+        if not sync.get("success"):
+            raise HTTPException(status_code=500, detail=f"Failed to index FAQ embedding: {sync.get('error')}")
+        db.commit()
+        db.refresh(faq)
+        return faq.to_record()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create FAQ: {str(e)}")
 
 
 @router.get("/", response_model=FAQListResponse)
@@ -118,7 +129,7 @@ async def list_faqs(
         size=size,
     )
 
-#validerar så att de faq_id är större än 1 om den inte är det skriver den ut ett HTTPException
+
 def _validate_faq_id(faq_id: int) -> None:
     if faq_id < 1:
         raise HTTPException(status_code=422, detail="faq_id must be a positive integer")
@@ -141,12 +152,22 @@ async def update_faq(faq_id: int, body: FAQSchema, db: Session = Depends(get_db)
     faq = db.query(FAQ).filter(FAQ.id == faq_id).first()
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ not found")
-    faq.question = body.question
-    faq.answer = body.answer
-    faq.video_link = body.video_link
-    db.commit()
-    db.refresh(faq)
-    return faq.to_record()
+    try:
+        faq.question = body.question
+        faq.answer = body.answer
+        faq.video_link = body.video_link
+        sync = upsert_faq_embedding(faq)
+        if not sync.get("success"):
+            raise HTTPException(status_code=500, detail=f"Failed to update FAQ embedding: {sync.get('error')}")
+        db.commit()
+        db.refresh(faq)
+        return faq.to_record()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update FAQ: {str(e)}")
 
 
 @router.delete("/{faq_id}", status_code=204)
@@ -156,6 +177,16 @@ async def delete_faq(faq_id: int, db: Session = Depends(get_db)):
     faq = db.query(FAQ).filter(FAQ.id == faq_id).first()
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ not found")
-    db.delete(faq)
-    db.commit()
-    return None
+    try:
+        sync = delete_faq_embeddings(faq_id)
+        if not sync.get("success"):
+            raise HTTPException(status_code=500, detail=f"Failed to delete FAQ embedding: {sync.get('error')}")
+        db.delete(faq)
+        db.commit()
+        return None
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete FAQ: {str(e)}")
