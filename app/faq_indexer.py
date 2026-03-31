@@ -30,7 +30,12 @@ def _doc_id_for_faq(faq_id: int) -> str:
 
 def _faq_to_document(row: FAQ) -> Document:
     content = f"{row.question} {row.answer}".strip()
-    meta = {"faq_id": row.id, "answer": row.answer, "video_link": row.video_link or ""}
+    meta = {
+        "faq_id": row.id,
+        "answer": row.answer,
+        "video_link": row.video_link or "",
+        "gym_ids": [gym.id for gym in getattr(row, "gyms", [])],
+    }
     return Document(id=_doc_id_for_faq(row.id), content=content, meta=meta)
 
 

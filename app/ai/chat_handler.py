@@ -56,6 +56,7 @@ class ChatHandler:
         user_message: str,
         conversation_state: Optional[str] = None,
         language: str = "en",
+        selected_gym_id: Optional[int] = None,
     ) -> MessageAnalysis:
         t0 = perf_counter()
         intent = await self.intent_recognizer.recognize(user_message)
@@ -71,7 +72,7 @@ class ChatHandler:
             )
             t2 = perf_counter()
         else:
-            faq_match = await self.faq_handler.get_match(user_message)
+            faq_match = await self.faq_handler.get_match(user_message, selected_gym_id=selected_gym_id)
             t2 = perf_counter()
             if self._should_direct_answer_with_faq(intent, faq_match):
                 fast_path_response = self._build_direct_faq_response(
@@ -97,6 +98,7 @@ class ChatHandler:
         customer_info: Optional[Dict] = None,
         conversation_state: Optional[str] = None,
         language: str = "en",
+        selected_gym_id: Optional[int] = None,
         analysis: Optional[MessageAnalysis] = None,
     ) -> Dict[str, any]:
         """
@@ -107,6 +109,7 @@ class ChatHandler:
             user_message=user_message,
             conversation_state=conversation_state,
             language=language,
+            selected_gym_id=selected_gym_id,
         )
         intent = analysis.intent
         current_state = analysis.current_state
@@ -196,7 +199,7 @@ class ChatHandler:
                 )
             except Exception:
                 pass
-            fallback = f"I apologize, but I'm having trouble right now. Please call us at {settings.gym_phone} and we'll be happy to help!"
+            fallback = "I apologize, but I'm having trouble right now. Please reach out to our team and we'll be happy to help."
             return {
                 "response": fallback,
                 "response_en": fallback,

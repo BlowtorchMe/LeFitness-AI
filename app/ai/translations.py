@@ -3,6 +3,7 @@ Fixed chat strings in English and Swedish.
 """
 from app.config import settings
 
+
 TEXTS = {
     "en": {
         "welcome": lambda: f"Hi! How cool that you're interested in {settings.free_trial_days} days of free training with us at {settings.gym_name}!\n\nWhen would you like to come to activate your trial period and get a tour of the gym?",
@@ -11,19 +12,25 @@ TEXTS = {
         "please_enter_email": "Please enter your email address:",
         "please_enter_phone": "Please enter your phone number:",
         "enter_info_above": "Please enter the information requested above.",
-        "booking_intro": lambda name, link: (
-            f"Perfect, {name}! Now let's get you booked for your free {settings.free_trial_days}-day trial at {settings.gym_name}!\n\n"
+        "booking_intro": lambda name, link, gym_name=None: (
+            f"Perfect, {name}! Now let's get you booked for your free {settings.free_trial_days}-day trial at {gym_name or settings.gym_name}!\n\n"
             "You'll get: Full gym access, all equipment, group training classes, personal gym tour.\n\n"
             f"Please book your appointment at a time that works best for you using this link:\n{link}\n\n"
             "Once you've booked, I'll confirm everything for you!"
         ),
-        "booking_follow_up": lambda name, link: (
-            f"Hi {name}, just checking in. If you'd still like to try {settings.gym_name}, you can book your free {settings.free_trial_days}-day trial here:\n{link}\n\n"
+        "booking_follow_up": lambda name, link, gym_name=None: (
+            f"Hi {name}, just checking in. If you'd still like to try {gym_name or settings.gym_name}, you can book your free {settings.free_trial_days}-day trial here:\n{link}\n\n"
             "If you have any other questions first, just send them here."
         ),
         "booking_confirm_calendar": "Great! I'll check the calendar and confirm your booking. You should receive a confirmation email shortly!",
         "book_link_once": lambda link: f"Great! Please use this link to book your appointment at a time that works best for you:\n{link}\n\nOnce you've booked, I'll confirm everything for you!",
         "service_overview_prompt": "Of course. Ask anything you want. If helpful, you can ask about opening hours, prices, classes, equipment, parking, or personal training.",
+        "select_gym_booking": "Perfect. Which gym would you like to book for?",
+        "select_gym_question": "Which gym are you asking about?",
+        "gym_phone": lambda gym_name, phone: f"The phone number for {gym_name} is {phone}.",
+        "gym_phone_missing": "not available right now",
+        "gym_location": lambda gym_name, location: f"{gym_name} is located at {location}.",
+        "no_gyms_available": "No gyms are available right now. Please try again later.",
     },
     "sv": {
         "welcome": lambda: f"Hej! Kul att du är intresserad av {settings.free_trial_days} dagars gratis träning hos oss på {settings.gym_name}!\n\nNär vill du komma för att aktivera din provperiod och få en rundtur i gymmet?",
@@ -32,19 +39,25 @@ TEXTS = {
         "please_enter_email": "Ange din e-postadress:",
         "please_enter_phone": "Ange ditt telefonnummer:",
         "enter_info_above": "Ange den information som begärts ovan.",
-        "booking_intro": lambda name, link: (
-            f"Perfekt, {name}! Nu bokar vi in dig för din gratis {settings.free_trial_days}-dagars provperiod på {settings.gym_name}!\n\n"
+        "booking_intro": lambda name, link, gym_name=None: (
+            f"Perfekt, {name}! Nu bokar vi in dig för din gratis {settings.free_trial_days}-dagars provperiod på {gym_name or settings.gym_name}!\n\n"
             "Du får: Full tillgång till gymmet, all utrustning, gruppträning, personlig gymrundtur.\n\n"
             f"Boka din tid när det passar dig bäst via denna länk:\n{link}\n\n"
             "När du bokat bekräftar jag allt!"
         ),
-        "booking_follow_up": lambda name, link: (
-            f"Hej {name}, jag ville bara följa upp. Om du fortfarande vill prova {settings.gym_name} kan du boka din gratis {settings.free_trial_days}-dagars provperiod här:\n{link}\n\n"
+        "booking_follow_up": lambda name, link, gym_name=None: (
+            f"Hej {name}, jag ville bara följa upp. Om du fortfarande vill prova {gym_name or settings.gym_name} kan du boka din gratis {settings.free_trial_days}-dagars provperiod här:\n{link}\n\n"
             "Om du vill fråga något mer först är det bara att skriva här."
         ),
         "booking_confirm_calendar": "Bra! Jag kollar kalendern och bekräftar din bokning. Du får en bekräftelse via e-post snart!",
         "book_link_once": lambda link: f"Bra! Använd denna länk för att boka din tid när det passar dig:\n{link}\n\nNär du bokat bekräftar jag allt!",
         "service_overview_prompt": "Självklart. Fråga vad du vill. Om det hjälper kan du fråga om öppettider, priser, klasser, utrustning, parkering eller personlig träning.",
+        "select_gym_booking": "Perfekt. Vilket gym vill du boka för?",
+        "select_gym_question": "Vilket gym menar du?",
+        "gym_phone": lambda gym_name, phone: f"Telefonnumret till {gym_name} är {phone}.",
+        "gym_phone_missing": "inte tillgängligt just nu",
+        "gym_location": lambda gym_name, location: f"{gym_name} ligger på {location}.",
+        "no_gyms_available": "Inga gym är tillgängliga just nu. Försök igen senare.",
     },
 }
 

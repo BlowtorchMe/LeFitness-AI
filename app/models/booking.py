@@ -31,6 +31,7 @@ class Booking(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True)
+    gym_id = Column(Integer, ForeignKey("gyms.id"), nullable=True, index=True)
     
     # Customer information
     customer_name = Column(String(255), nullable=False)

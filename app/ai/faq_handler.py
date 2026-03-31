@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from time import perf_counter
-from typing import Optional
+from typing import Optional, Sequence
 
 from haystack.components.embedders import OpenAITextEmbedder
 from haystack.utils import Secret
@@ -123,6 +123,7 @@ class FAQMatch:
     score: float
     video_link: Optional[str] = None
     answer_sv: Optional[str] = None
+    gym_ids: tuple[int, ...] = ()
 
 
 def _ensure_pg_conn_str() -> None:
@@ -179,13 +180,21 @@ def _get_direct_match(question: str) -> Optional[FAQMatch]:
     return None
 
 
-def _retrieve_match_sync(question: str) -> Optional[FAQMatch]:
-    direct_match = _get_direct_match(question)
-    if direct_match:
-        logger.info("faq_direct_keyword_match score=1.000")
-        return direct_match
+def _match_for_selected_gym(gym_ids: Sequence[int], selected_gym_id: Optional[int]) -> bool:
+    if not gym_ids:
+        return True
+    if selected_gym_id is None:
+        return False
+    return selected_gym_id in gym_ids
+
+
+def _retrieve_match_sync(question: str, selected_gym_id: Optional[int] = None) -> Optional[FAQMatch]:
     _ensure_pg_conn_str()
     if not settings.openai_api_key:
+        direct_match = _get_direct_match(question)
+        if direct_match and _match_for_selected_gym(direct_match.gym_ids, selected_gym_id):
+            logger.info("faq_direct_keyword_match score=1.000")
+            return direct_match
         return None
     try:
         t0 = perf_counter()
@@ -196,40 +205,59 @@ def _retrieve_match_sync(question: str) -> Optional[FAQMatch]:
         t2 = perf_counter()
         embedding = out.get("embedding")
         if not embedding:
+            direct_match = _get_direct_match(question)
+            if direct_match and _match_for_selected_gym(direct_match.gym_ids, selected_gym_id):
+                return direct_match
             return None
-        result = retriever.run(query_embedding=embedding, top_k=1)
+        result = retriever.run(query_embedding=embedding, top_k=5)
         t3 = perf_counter()
         docs = result.get("documents") or []
-        if not docs:
-            return None
-        doc = docs[0]
-        answer = doc.meta.get("answer")
-        score = float(getattr(doc, "score", 0.0) or 0.0)
-        video_link = doc.meta.get("video_link") or None
         logger.info(
             "faq_retrieve_timing cached_init=%.3f embed=%.3f retrieve=%.3f score=%.3f",
             t1 - t0,
             t2 - t1,
             t3 - t2,
-            score,
+            float(getattr(docs[0], "score", 0.0) or 0.0) if docs else 0.0,
         )
-        if not answer:
-            return None
-        return FAQMatch(answer=answer, score=score, video_link=video_link)
+        for doc in docs:
+            answer = doc.meta.get("answer")
+            score = float(getattr(doc, "score", 0.0) or 0.0)
+            video_link = doc.meta.get("video_link") or None
+            gym_ids = tuple(int(gym_id) for gym_id in (doc.meta.get("gym_ids") or []) if gym_id)
+            if answer and _match_for_selected_gym(gym_ids, selected_gym_id):
+                return FAQMatch(
+                    answer=answer,
+                    score=score,
+                    video_link=video_link,
+                    gym_ids=gym_ids,
+                )
+        direct_match = _get_direct_match(question)
+        if direct_match and _match_for_selected_gym(direct_match.gym_ids, selected_gym_id):
+            logger.info("faq_direct_keyword_match score=1.000")
+            return direct_match
+        return None
     except Exception:
         logger.exception("faq_retrieve_failed")
+        direct_match = _get_direct_match(question)
+        if direct_match and _match_for_selected_gym(direct_match.gym_ids, selected_gym_id):
+            return direct_match
         return None
 
 
 class FAQHandler:
     """Handles FAQ queries via DB-backed pgvector RAG."""
 
-    async def get_match(self, question: str) -> Optional[FAQMatch]:
+    async def get_match(self, question: str, selected_gym_id: Optional[int] = None) -> Optional[FAQMatch]:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _retrieve_match_sync, question.strip() or "")
+        return await loop.run_in_executor(
+            None,
+            _retrieve_match_sync,
+            question.strip() or "",
+            selected_gym_id,
+        )
 
-    async def get_answer(self, question: str) -> Optional[str]:
-        match = await self.get_match(question)
+    async def get_answer(self, question: str, selected_gym_id: Optional[int] = None) -> Optional[str]:
+        match = await self.get_match(question, selected_gym_id=selected_gym_id)
         return match.answer if match else None
 
     @staticmethod

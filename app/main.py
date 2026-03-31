@@ -14,8 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.ai.chat_handler import ChatHandler
 from app.ai.faq_handler import FAQHandler
-from app.api import leads, bookings, chat, faq
+from app.api import admin, leads, bookings, chat, faq, gyms
 from app.config import settings
+from app.database.database import ensure_schema
 from app.services.calendar_webhook_service import calendar_webhook_service
 from app.webhooks import meta_webhook, calendar_webhook
 
@@ -51,6 +52,7 @@ async def lifespan(app: FastAPI):
     """Lifecycle events for the app"""
     # Startup: Set up calendar webhook and scheduler
     logger.info("Starting up...")
+    ensure_schema()
     threading.Thread(target=_warmup_faq_background, daemon=True).start()
     
     if settings.google_calendar_id and settings.google_service_account and settings.google_calendar_webhook_url:
@@ -98,10 +100,12 @@ app.add_middleware(
 # Include routers
 app.include_router(meta_webhook.router, prefix="/webhooks/meta", tags=["webhooks"])
 app.include_router(calendar_webhook.router, prefix="/webhooks/calendar", tags=["webhooks"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(leads.router, prefix="/api/leads", tags=["leads"])
 app.include_router(bookings.router, prefix="/api/bookings", tags=["bookings"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(faq.router, prefix="/api/faq", tags=["faq"])
+app.include_router(gyms.router, prefix="/api/gyms", tags=["gyms"])
 
 
 @app.get("/")

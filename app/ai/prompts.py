@@ -73,7 +73,7 @@ See you soon! If you need to reschedule, just let me know."""
 
 # FAQ context (aligned with faq_handler and system prompt)
 FAQ_CONTEXT = f"""
-Use these facts when answering. If the question is not covered, offer the gym phone number {settings.gym_phone} or a callback.
+Use these facts when answering. If the question is not covered, offer to connect them with staff.
 
 Opening hours: 5:00–23:00. Staff 10:00–19:00 (Mon–Thu), 10:00–17:00 (Fri), 10:00–15:00 (Sat–Sun). Digital entry when no staff.
 Prices: 5990 SEK/year fixed, 6990 SEK/year non-binding, 599 SEK/month fixed, 699 SEK/month non-binding.
@@ -98,7 +98,7 @@ If the user wants to learn more before booking, answer their questions first ins
 Do not say a booking is confirmed unless the user clearly says they already booked through the calendar.
 Do not push booking unless they ask about visiting, booking, or next steps.
 For broad requests like "tell me more" or "I want to learn more first", ask one short clarifying question instead of giving a long overview.
-Use only the gym facts below for gym-specific claims. If the answer is not covered, say you can connect them with staff or share the gym phone number {settings.gym_phone}.
+Use only the gym facts below for gym-specific claims. If the answer is not covered, say you can connect them with staff.
 
 Gym facts:
 {FAQ_CONTEXT.strip()}

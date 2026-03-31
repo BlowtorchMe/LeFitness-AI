@@ -4,14 +4,16 @@ FAQ API: JSON import, add one, reindex.
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
+from app.auth import require_admin
 from app.database.database import get_db
+from app.models.gym import Gym
 from app.models.faq import FAQ, FAQSchema, FAQRecord
 from app.faq_indexer import run_indexer, upsert_faq_embedding, delete_faq_embeddings
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 class FAQImportResponse(BaseModel):
@@ -19,6 +21,27 @@ class FAQImportResponse(BaseModel):
     reindexed: bool
     reindex_count: int = 0
     reindex_error: Optional[str] = None
+
+
+class FAQImportItem(BaseModel):
+    question: str = Field(..., min_length=1)
+    answer: str = Field(..., min_length=1)
+    video_link: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_strings(cls, data):
+        if isinstance(data, dict):
+            for key in ("question", "answer"):
+                if key in data and isinstance(data.get(key), str):
+                    data = {**data, key: data[key].strip()}
+            if "video_link" in data and isinstance(data.get("video_link"), str):
+                value = data["video_link"].strip()
+                data = {**data, "video_link": value if value else None}
+        return data
 
 
 class ReindexResponse(BaseModel):
@@ -37,9 +60,28 @@ class FAQListResponse(BaseModel):
 MAX_IMPORT_SIZE = 500
 
 
+def _load_gym_map(db: Session, gym_ids: List[int]) -> dict[int, Gym]:
+    if not gym_ids:
+        return {}
+    gyms = db.query(Gym).filter(Gym.id.in_(gym_ids)).all()
+    gym_map = {gym.id: gym for gym in gyms}
+    missing = [gym_id for gym_id in gym_ids if gym_id not in gym_map]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Unknown gym ids: {missing}")
+    return gym_map
+
+
+def _apply_faq_body(faq: FAQ, body: FAQSchema, db: Session) -> None:
+    faq.question = body.question
+    faq.answer = body.answer
+    faq.video_link = body.video_link
+    gym_map = _load_gym_map(db, body.gym_ids)
+    faq.gyms = [gym_map[gym_id] for gym_id in body.gym_ids]
+
+
 @router.post("/import", response_model=FAQImportResponse)
 async def import_faqs(
-    body: List[FAQSchema],
+    body: List[FAQImportItem],
     reindex: bool = False,
     db: Session = Depends(get_db),
 ):
@@ -54,6 +96,7 @@ async def import_faqs(
     try:
         for item in body:
             faq = FAQ(question=item.question, answer=item.answer, video_link=item.video_link)
+            faq.gyms = []
             db.add(faq)
         db.commit()
     except Exception as e:
@@ -88,7 +131,8 @@ async def reindex_faqs():
 @router.post("/", response_model=FAQRecord)
 async def create_faq(body: FAQSchema, db: Session = Depends(get_db)):
     """Add one FAQ. Example for admin form (add one by one)."""
-    faq = FAQ(question=body.question, answer=body.answer, video_link=body.video_link)
+    faq = FAQ()
+    _apply_faq_body(faq, body, db)
     db.add(faq)
     try:
         db.flush()
@@ -153,9 +197,7 @@ async def update_faq(faq_id: int, body: FAQSchema, db: Session = Depends(get_db)
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ not found")
     try:
-        faq.question = body.question
-        faq.answer = body.answer
-        faq.video_link = body.video_link
+        _apply_faq_body(faq, body, db)
         sync = upsert_faq_embedding(faq)
         if not sync.get("success"):
             raise HTTPException(status_code=500, detail=f"Failed to update FAQ embedding: {sync.get('error')}")

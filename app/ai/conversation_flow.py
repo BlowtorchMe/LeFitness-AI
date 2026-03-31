@@ -128,11 +128,7 @@ class ConversationFlow:
         Get Google Calendar Appointment Schedule booking page link
         This is the booking page where users can see available slots and book directly
         """
-        # If Appointment Schedule link is configured, use it (best option)
-        if settings.google_appointment_schedule_link:
-            return settings.google_appointment_schedule_link
-        
-        # Fallback: If we have a calendar ID, try to create a link to view the calendar
+        # If we have a calendar ID, try to create a link to view the calendar
         if settings.google_calendar_id:
             calendar_id_encoded = urllib.parse.quote(settings.google_calendar_id, safe='')
             # Link to view the calendar (shows all events)

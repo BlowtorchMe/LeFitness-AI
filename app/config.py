@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     # Google Calendar (Optional - only needed for booking tracking)
     google_calendar_id: Optional[str] = None
     google_service_account: Optional[str] = None
-    google_appointment_schedule_link: Optional[str] = None
     google_calendar_webhook_url: Optional[str] = None  # Public URL for calendar webhook (e.g., https://yourdomain.com/webhooks/calendar)
     timezone: str = "UTC"
     
@@ -41,15 +40,16 @@ class Settings(BaseSettings):
     
     # Gym Information
     gym_name: str = "LE Fitness"
-    gym_phone: Optional[str] = None
-    gym_email: Optional[str] = None
-    
     # Free Trial Period
     free_trial_days: int = 10
     
     # Testing/Mock Mode
     use_mock_apis: bool = False  # Set to True to use mock APIs instead of real ones
     test_mode: bool = False  # Enable test mode features
+
+    # Admin
+    admin_password: str = "lefitness-admin"
+    admin_session_secret: str = "change-me-admin-session-secret"
 
     @field_validator("debug", mode="before")
     @classmethod
@@ -66,6 +66,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         case_sensitive = False
         env_file_encoding = "utf-8"
+        extra = "ignore"
         # Don't fail if .env file doesn't exist (for Vercel)
         env_file_required = False
 

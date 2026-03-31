@@ -1,7 +1,7 @@
 """
 Lead data model
 """
-from sqlalchemy import Column, Integer, String, DateTime, Text, Enum
+from sqlalchemy import Column, Integer, String, DateTime, Text, Enum, ForeignKey
 from app.database.base import Base
 from datetime import datetime
 import enum
@@ -56,6 +56,9 @@ class Lead(Base):
 
     # Language preference (en, sv)
     language = Column(String(5), default="en", nullable=True)
+
+    # Selected gym for multi-gym chat flow
+    selected_gym_id = Column(Integer, ForeignKey("gyms.id"), nullable=True, index=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
