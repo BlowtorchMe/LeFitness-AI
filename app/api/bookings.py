@@ -46,12 +46,12 @@ async def get_booking(booking_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/available/slots")
-async def get_available_slots(date: str, db: Session = Depends(get_db)):
+async def get_available_slots(date: str, gym_slug: str, db: Session = Depends(get_db)):
     """Get available booking slots for a date (format: YYYY-MM-DD)"""
     try:
         date_obj = datetime.strptime(date, "%Y-%m-%d")
         booking_service = BookingService(db)
-        slots = booking_service.get_available_slots(date_obj)
+        slots = booking_service.get_available_slots(date_obj, gym_slug=gym_slug)
         return {"date": date, "slots": slots}
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")

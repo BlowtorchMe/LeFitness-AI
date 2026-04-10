@@ -12,8 +12,9 @@ from app.models.lead import Lead
 from app.services.booking_service import BookingService
 from app.services.calendar_tracking import CalendarTrackingService
 from app.services.followup_service import FollowupService
+from app.services.gym_calendar_config import get_gym_calendar_config
 from app.services.lead_service import LeadService
-from app.webhooks.calendar_webhook import _process_matched_booking
+from app.webhooks.calendar_webhook import _process_matched_booking, ALL_GYM_SLUGS
 
 
 @celery_app.task
@@ -53,16 +54,16 @@ def followup_calendar_link_users():
         # Find leads who clicked calendar link 2-5 minutes ago
         time_window_start = datetime.utcnow() - timedelta(minutes=5)
         time_window_end = datetime.utcnow() - timedelta(minutes=2)
-        
+
         waiting_leads = db.query(Lead).filter(
             Lead.notes == "waiting_for_calendar_booking",
             Lead.updated_at >= time_window_start,
             Lead.updated_at <= time_window_end
         ).all()
-        
+
         messenger_api = MessengerAPI()
         results = []
-        
+
         for lead in waiting_leads:
             if lead.messenger_id:
                 # Natural follow-up message
@@ -71,20 +72,20 @@ def followup_calendar_link_users():
                     "Just checking in - were you able to book your appointment on the calendar? "
                     "If you did, I'll confirm it right away! If you need help, just let me know."
                 )
-                
+
                 messenger_api.send_message(
                     recipient_id=lead.messenger_id,
                     message=message
                 )
-                
+
                 results.append({
                     "lead_id": lead.id,
                     "messenger_id": lead.messenger_id,
                     "status": "follow_up_sent"
                 })
-        
+
         return {"sent": len(results), "results": results}
-    
+
     finally:
         db.close()
 
@@ -92,34 +93,52 @@ def followup_calendar_link_users():
 @celery_app.task
 def scan_calendar_for_bookings():
     """
-    Periodically scan calendar for new bookings
-    This is a backup method if push notifications fail
+    Periodically scan all gym calendars for new bookings.
+    This is a backup method if push notifications fail.
+    Loopar igenom alla konfigurerade gym och söker efter nya bokningar.
     """
     db = SessionLocal()
     try:
-        calendar = GoogleCalendar()
         tracking_service = CalendarTrackingService(db)
-        
-        # Check for calendar bookings in last 2 hours
+
+        # check_for_calendar_bookings hämtar nu events från alla gym-kalendrar internt
         matches = tracking_service.check_for_calendar_bookings(hours_window=2)
-        
+
         # Process matches (this will create bookings and notify users)
         lead_service = LeadService(db)
         booking_service = BookingService(db)
-        
+
         processed = 0
         if matches:
             for match in matches:
-                asyncio.run(_process_matched_booking(
-                    match["lead"],
-                    match["event"],
-                    lead_service,
-                    booking_service
-                ))
-                processed += 1
-        
+                # Vi behöver gym_slug här — i en framtida förbättring kan man
+                # matcha event till gym baserat på vilken kalender det kom ifrån.
+                # För nu används lead.selected_gym_id om det finns.
+                lead = match["lead"]
+                # Försök hitta gym_slug från leadens valda gym
+                gym_slug = None
+                if hasattr(lead, "selected_gym_id") and lead.selected_gym_id:
+                    from app.models.gym import Gym
+                    gym = db.query(Gym).filter(Gym.id == lead.selected_gym_id).first()
+                    if gym:
+                        gym_slug = gym.slug
+
+                if not gym_slug:
+                    # Fallback: använd första gymmet (inte perfekt, men bättre än krasch)
+                    gym_slug = ALL_GYM_SLUGS[0] if ALL_GYM_SLUGS else None
+
+                if gym_slug:
+                    asyncio.run(_process_matched_booking(
+                        lead,
+                        match["event"],
+                        lead_service,
+                        booking_service,
+                        gym_slug=gym_slug
+                    ))
+                    processed += 1
+
         return {"scanned": True, "matches_found": len(matches), "processed": processed}
-    
+
     finally:
         db.close()
 
@@ -145,4 +164,3 @@ celery_app.conf.beat_schedule.update({
         "schedule": 300.0,  # Every 5 minutes
     },
 })
-

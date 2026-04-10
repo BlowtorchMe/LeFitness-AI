@@ -54,8 +54,15 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     ensure_schema()
     threading.Thread(target=_warmup_faq_background, daemon=True).start()
-    
-    if settings.google_calendar_id and settings.google_service_account and settings.google_calendar_webhook_url:
+
+    # Kolla om minst ett gym har en kalender konfigurerad
+    has_any_calendar = (
+        settings.google_service_account
+        and settings.google_calendar_webhook_url
+        and (settings.google_calendar_taby_id or settings.google_calendar_varmdo_id)
+    )
+
+    if has_any_calendar:
         result = calendar_webhook_service.setup_webhook()
         if result.get("success"):
             # Schedule webhook renewal every 6 days (cron-like)
@@ -71,14 +78,15 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Failed to set up calendar webhook: {result.get('error')}")
     else:
         logger.info("Calendar webhook not configured - skipping setup")
-    
+
     yield
-    
+
     # Shutdown: Stop scheduler and webhook
     logger.info("Shutting down...")
     if scheduler.running:
         scheduler.shutdown()
-    if calendar_webhook_service.channel_id:
+    # Stoppa alla aktiva webhooks (den fixade versionen hanterar alla gym internt)
+    if calendar_webhook_service.active_watches:
         calendar_webhook_service.stop_webhook()
 
 app = FastAPI(

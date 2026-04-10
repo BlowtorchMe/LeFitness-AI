@@ -19,14 +19,17 @@ from app.config import settings
 
 class GoogleCalendar:
     """Handles Google Calendar integration"""
-    
+
     SCOPES = ['https://www.googleapis.com/auth/calendar']
-    
-    def __init__(self):
-        self.calendar_id = settings.google_calendar_id
+
+    def __init__(self, calendar_id: Optional[str] = None):
+        self.calendar_id = calendar_id
         self.service = None
-        # Only authenticate if credentials are provided
-        if settings.google_calendar_id and (getattr(settings, 'google_client_config', None) or settings.google_service_account):
+
+        if not self.calendar_id:
+            return
+
+        if getattr(settings, 'google_client_config', None) or settings.google_service_account:
             self._authenticate()
     
     def _authenticate(self):

@@ -180,6 +180,18 @@ def _get_direct_match(question: str) -> Optional[FAQMatch]:
     return None
 
 
+def _detect_gym_from_question(question: str) -> Optional[int]:
+    q = (question or "").strip().lower()
+
+    if "värmdö" in q or "varmdo" in q:
+        return 2
+
+    if "täby" in q or "taby" in q:
+        return 1
+
+    return None
+
+
 def _match_for_selected_gym(gym_ids: Sequence[int], selected_gym_id: Optional[int]) -> bool:
     if not gym_ids:
         return True
@@ -190,56 +202,76 @@ def _match_for_selected_gym(gym_ids: Sequence[int], selected_gym_id: Optional[in
 
 def _retrieve_match_sync(question: str, selected_gym_id: Optional[int] = None) -> Optional[FAQMatch]:
     _ensure_pg_conn_str()
+
+    detected_gym_id = _detect_gym_from_question(question)
+    effective_gym_id = detected_gym_id if detected_gym_id is not None else selected_gym_id
+
     if not settings.openai_api_key:
         direct_match = _get_direct_match(question)
-        if direct_match and _match_for_selected_gym(direct_match.gym_ids, selected_gym_id):
+        if direct_match and _match_for_selected_gym(direct_match.gym_ids, effective_gym_id):
             logger.info("faq_direct_keyword_match score=1.000")
             return direct_match
         return None
+
     try:
         t0 = perf_counter()
         embedder = _get_embedder()
         retriever = _get_retriever()
         t1 = perf_counter()
+
         out = embedder.run(text=question)
         t2 = perf_counter()
+
         embedding = out.get("embedding")
         if not embedding:
             direct_match = _get_direct_match(question)
-            if direct_match and _match_for_selected_gym(direct_match.gym_ids, selected_gym_id):
+            if direct_match and _match_for_selected_gym(direct_match.gym_ids, effective_gym_id):
                 return direct_match
             return None
+
         result = retriever.run(query_embedding=embedding, top_k=5)
         t3 = perf_counter()
         docs = result.get("documents") or []
+
         logger.info(
-            "faq_retrieve_timing cached_init=%.3f embed=%.3f retrieve=%.3f score=%.3f",
+            "faq_retrieve_timing cached_init=%.3f embed=%.3f retrieve=%.3f score=%.3f selected_gym=%s detected_gym=%s effective_gym=%s",
             t1 - t0,
             t2 - t1,
             t3 - t2,
             float(getattr(docs[0], "score", 0.0) or 0.0) if docs else 0.0,
+            selected_gym_id,
+            detected_gym_id,
+            effective_gym_id,
         )
+
         for doc in docs:
             answer = doc.meta.get("answer")
             score = float(getattr(doc, "score", 0.0) or 0.0)
             video_link = doc.meta.get("video_link") or None
             gym_ids = tuple(int(gym_id) for gym_id in (doc.meta.get("gym_ids") or []) if gym_id)
-            if answer and _match_for_selected_gym(gym_ids, selected_gym_id):
+
+            if (
+                answer
+                and score >= FAQ_DIRECT_RESPONSE_THRESHOLD
+                and _match_for_selected_gym(gym_ids, effective_gym_id)
+            ):
                 return FAQMatch(
                     answer=answer,
                     score=score,
                     video_link=video_link,
                     gym_ids=gym_ids,
                 )
+
         direct_match = _get_direct_match(question)
-        if direct_match and _match_for_selected_gym(direct_match.gym_ids, selected_gym_id):
+        if direct_match and _match_for_selected_gym(direct_match.gym_ids, effective_gym_id):
             logger.info("faq_direct_keyword_match score=1.000")
             return direct_match
+
         return None
     except Exception:
         logger.exception("faq_retrieve_failed")
         direct_match = _get_direct_match(question)
-        if direct_match and _match_for_selected_gym(direct_match.gym_ids, selected_gym_id):
+        if direct_match and _match_for_selected_gym(direct_match.gym_ids, effective_gym_id):
             return direct_match
         return None
 

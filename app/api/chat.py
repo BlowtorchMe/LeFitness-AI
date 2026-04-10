@@ -651,7 +651,11 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
     conversation_service = ConversationService(db)
     lead = lead_service.get_lead_by_messenger_id(sender_id)
     active_gyms = _get_active_gyms(db)
-
+    print("ACTIVE GYMS:", [(gym.id, gym.name, gym.slug, gym.is_active, gym.booking_url) for gym in active_gyms])
+    print("=== CHAT ENDPOINT HIT ===")
+    print("ACTIVE GYMS:", [(gym.id, gym.name, gym.slug, gym.is_active, gym.booking_url) for gym in active_gyms])
+    print("CURRENT STATE:", lead.conversation_state if lead else None)
+    print("SELECTED GYM ID:", lead.selected_gym_id if lead else None)
     if not message_text and not action and not lead:
         return ChatResponse(session_id=session_id, messages=_initial_messages(requested_lang), language=requested_lang)
 
@@ -757,6 +761,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             lang,
             "booking",
         )
+        print("GYM OPTIONS:", options)
         db.commit()
         return _response_from_state(session_id, responses, lead, current_gym, options=options)
 

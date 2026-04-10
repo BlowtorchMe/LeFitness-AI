@@ -25,9 +25,14 @@ class Settings(BaseSettings):
     meta_app_secret: Optional[str] = None
     meta_access_token: Optional[str] = None
     meta_verify_token: Optional[str] = None
-    
+
     # Google Calendar (Optional - only needed for booking tracking)
-    google_calendar_id: Optional[str] = None
+    google_calendar_taby_id: Optional[str] = None
+    google_calendar_varmdo_id: Optional[str] = None
+
+    google_appointment_schedule_taby_link: Optional[str] = None
+    google_appointment_schedule_varmdo_link: Optional[str] = None
+
     google_service_account: Optional[str] = None
     google_calendar_webhook_url: Optional[str] = None  # Public URL for calendar webhook (e.g., https://yourdomain.com/webhooks/calendar)
     timezone: str = "UTC"

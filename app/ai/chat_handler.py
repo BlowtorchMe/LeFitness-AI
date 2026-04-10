@@ -40,7 +40,7 @@ class MessageAnalysis:
 
 class ChatHandler:
     """Handles AI conversations with customers"""
-    
+
     def __init__(self):
         # Initialize OpenAI client only if API key is available
         self.client = _get_openai_client()
@@ -50,7 +50,7 @@ class ChatHandler:
         self.logger = logging.getLogger(__name__)
         self._translation_cache: Dict[Tuple[str, str], str] = {}
 
-    
+
     async def analyze_message(
         self,
         user_message: str,
@@ -149,11 +149,11 @@ class ChatHandler:
             faq_match=faq_match,
             language=language,
         )
-        
+
         if not self.client:
             err = "I'm sorry, the AI service is not configured. Please contact support."
             return {"response": err, "response_en": err, "response_sv": None, "intent": "error", "next_state": conversation_state}
-        
+
         try:
             response = self.client.chat.completions.create(
                 model=settings.openai_model,
@@ -186,7 +186,7 @@ class ChatHandler:
                 t4 - t0,
             )
             return out
-        
+
         except Exception as e:
             self.logger.exception("OpenAI chat completion failed")
             try:
@@ -212,7 +212,7 @@ class ChatHandler:
                 "error": str(e)
             }
 
-    
+
     def _determine_next_state(
         self,
         current_state: ConversationState,
@@ -221,7 +221,7 @@ class ChatHandler:
         customer_info: Optional[Dict]
     ) -> Optional[ConversationState]:
         """Determine next state based on current state and user intent"""
-        
+
         # If booking intent is clear, move to the booking recommendation step
         if intent == "book" and current_state in [
             ConversationState.PROFILE_COMPLETE,
@@ -229,18 +229,18 @@ class ChatHandler:
             ConversationState.ANSWERING_QUESTIONS,
         ]:
             return ConversationState.RECOMMENDING_BOOKING
-        
+
         # If user provides date/time, move to confirmation
         if current_state == ConversationState.COLLECTING_BOOKING_DETAILS:
             # Check if message contains date/time indicators
             time_indicators = ["tomorrow", "today", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "am", "pm", ":", "at"]
             if any(indicator in user_message.lower() for indicator in time_indicators):
                 return ConversationState.CONFIRMING_BOOKING
-        
+
         # If user confirms, move to booking confirmed
         if current_state == ConversationState.CONFIRMING_BOOKING and intent in ["book", "greeting"]:
             return ConversationState.BOOKING_CONFIRMED
-        
+
         # After profile completion, default to question-answering unless booking is explicit.
         if current_state == ConversationState.PROFILE_COMPLETE:
             return ConversationState.ANSWERING_QUESTIONS
@@ -256,10 +256,10 @@ class ChatHandler:
             if intent == "book":
                 return ConversationState.RECOMMENDING_BOOKING
             return ConversationState.ANSWERING_QUESTIONS
-        
+
         # Default: get next state from flow manager
         return self.flow_manager.get_next_state(current_state)
-    
+
     def _should_proceed_to_next_state(self, current_state: ConversationState, intent: str) -> bool:
         """Determine if we should proactively move to next state"""
         if intent == "book" and current_state in [
@@ -366,7 +366,7 @@ class ChatHandler:
                 ),
             }
         )
-        if faq_match:
+        if faq_match and faq_match.score >= FAQ_DIRECT_RESPONSE_THRESHOLD:
             messages.append(
                 {
                     "role": "system",
@@ -472,9 +472,9 @@ class ChatHandler:
             "I cannot",
             "I'm unable"
         ]
-        
+
         return any(phrase.lower() in ai_response.lower() for phrase in uncertainty_phrases)
-    
+
     def get_welcome_message(self, language: str = "en", customer_name: Optional[str] = None) -> str:
         """Generate welcome message in the given language."""
         if customer_name:
