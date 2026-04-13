@@ -232,6 +232,25 @@ def _retrieve_match_sync(question: str, selected_gym_id: Optional[int] = None) -
         result = retriever.run(query_embedding=embedding, top_k=5)
         t3 = perf_counter()
         docs = result.get("documents") or []
+        for i, doc in enumerate(docs):
+            logger.info(
+                "faqdoc%s score=%.3f content=%r answer=%r gym_ids=%r meta=%r",
+                i,
+                float(getattr(doc, "score", 0.0) or 0.0),
+                getattr(doc, "content", "")[:200],
+                doc.meta.get("answer"),
+                doc.meta.get("gym_ids"),
+                doc.meta,
+            )
+
+        logger.info(
+            "faq_debug question=%r selected_gym=%s detected_gym=%s effective_gym=%s docs=%s",
+            question,
+            selected_gym_id,
+            detected_gym_id,
+            effective_gym_id,
+            len(docs),
+        )
 
         logger.info(
             "faq_retrieve_timing cached_init=%.3f embed=%.3f retrieve=%.3f score=%.3f selected_gym=%s detected_gym=%s effective_gym=%s",
