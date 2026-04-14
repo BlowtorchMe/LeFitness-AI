@@ -3,7 +3,9 @@ Web chat API with profile gathering, gym selection, FAQ handling, and booking fl
 """
 import base64
 import re
+import unicodedata
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -41,6 +43,11 @@ PHONE_PATTERNS = (
     r"\bnumber\b",
     r"\bcall\b",
     r"\bcontact\b",
+    r"\btelefon\b",
+    r"\btelefonnum(?:mer|ret)\b",
+    r"\bnum(?:mer|ret)\b",
+    r"\bringen\b",
+    r"\bkontakt\b",
 )
 LOCATION_PATTERNS = (
     r"\baddress\b",
@@ -48,6 +55,10 @@ LOCATION_PATTERNS = (
     r"\bwhere\b.*\bare\b",
     r"\bwhere\b.*\blocated\b",
     r"\bfind\b.*\byou\b",
+    r"\badress\b",
+    r"\bplats\b",
+    r"\bvar\b.*\bligger\b",
+    r"\bvar\b.*\bfinns\b",
 )
 BOOKING_PATTERNS = (
     r"\bbook\b",
@@ -56,6 +67,11 @@ BOOKING_PATTERNS = (
     r"\bschedule\b",
     r"\bvisit\b",
     r"\btrial\b",
+    r"\bboka\b",
+    r"\bbokning\b",
+    r"\btid\b",
+    r"\bprova\b",
+    r"\bprovperiod\b",
 )
 GYM_SPECIFIC_PATTERNS = (
     r"\bmachines?\b",
@@ -169,6 +185,93 @@ def _auto_select_single_gym(lead, gyms: List[Gym]) -> Optional[Gym]:
         lead.selected_gym_id = gyms[0].id
         return gyms[0]
     return None
+
+
+def _normalize_gym_lookup(value: Optional[str]) -> str:
+    normalized = unicodedata.normalize("NFKD", value or "")
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    collapsed = re.sub(r"[^a-z0-9]+", " ", ascii_text.lower()).strip()
+    return " ".join(collapsed.split())
+
+
+COMMON_GYM_ALIAS_TOKENS = {
+    "and",
+    "club",
+    "codex",
+    "fitness",
+    "for",
+    "gym",
+    "health",
+    "le",
+    "local",
+    "qa",
+    "studio",
+    "the",
+    "training",
+}
+
+
+def _gym_aliases(gyms: List[Gym], gym: Gym) -> List[str]:
+    normalized_sources = [
+        _normalize_gym_lookup(gym.name),
+        _normalize_gym_lookup(gym.slug),
+        _normalize_gym_lookup(gym.slug.replace("-", " ")),
+        _normalize_gym_lookup(gym.location),
+    ]
+    full_aliases = {source for source in normalized_sources if source}
+
+    token_counts: Counter[str] = Counter()
+    gym_tokens: dict[int, set[str]] = {}
+    for item in gyms:
+        item_sources = [
+            _normalize_gym_lookup(item.name),
+            _normalize_gym_lookup(item.slug),
+            _normalize_gym_lookup(item.slug.replace("-", " ")),
+            _normalize_gym_lookup(item.location),
+        ]
+        tokens = {
+            token
+            for source in item_sources
+            for token in source.split()
+            if len(token) >= 3 and not token.isdigit() and token not in COMMON_GYM_ALIAS_TOKENS
+        }
+        gym_tokens[item.id] = tokens
+        token_counts.update(tokens)
+
+    aliases = set(full_aliases)
+    aliases.update(token for token in gym_tokens.get(gym.id, set()) if token_counts[token] == 1)
+    return sorted(aliases, key=len, reverse=True)
+
+
+def _matched_gyms(gyms: List[Gym], message_text: str) -> List[Gym]:
+    normalized_message = _normalize_gym_lookup(message_text)
+    if not normalized_message:
+        return []
+
+    matches: dict[int, tuple[int, Gym]] = {}
+    for gym in gyms:
+        aliases = _gym_aliases(gyms, gym)
+        for alias in aliases:
+            if not alias:
+                continue
+            if re.search(rf"\b{re.escape(alias)}\b", normalized_message):
+                score = len(alias)
+                current = matches.get(gym.id)
+                if not current or score > current[0]:
+                    matches[gym.id] = (score, gym)
+    return [match[1] for match in sorted(matches.values(), key=lambda item: item[0], reverse=True)]
+
+
+def _detect_mentioned_gym(gyms: List[Gym], message_text: str) -> Optional[Gym]:
+    matches = _matched_gyms(gyms, message_text)
+    return matches[0] if matches else None
+
+
+def _should_switch_selected_gym(current_gym: Optional[Gym], mentioned_gyms: List[Gym]) -> bool:
+    if len(mentioned_gyms) != 1:
+        return False
+    mentioned_gym = mentioned_gyms[0]
+    return not current_gym or mentioned_gym.id != current_gym.id
 
 
 def _booking_link_for_gym(gym: Gym) -> str:
@@ -542,7 +645,7 @@ def _is_location_specific_question(message_text: str, intent: Optional[str]) -> 
     return any(re.search(pattern, normalized) for pattern in GYM_SPECIFIC_PATTERNS)
 
 
-def _gym_reference_response(gym: Gym, message_text: str) -> Optional[tuple[str, str]]:
+def _gym_contact_or_location_response(gym: Gym, message_text: str) -> Optional[tuple[str, str]]:
     normalized = " ".join((message_text or "").strip().lower().split())
     if any(re.search(pattern, normalized) for pattern in PHONE_PATTERNS):
         return (
@@ -554,13 +657,15 @@ def _gym_reference_response(gym: Gym, message_text: str) -> Optional[tuple[str, 
             t("en", "gym_location", gym_name=gym.name, location=gym.location),
             t("sv", "gym_location", gym_name=gym.name, location=gym.location),
         )
-    if any(re.search(pattern, normalized) for pattern in BOOKING_PATTERNS):
-        link = _booking_link_for_gym(gym)
-        return (
-            t("en", "book_link_once", link=link),
-            t("sv", "book_link_once", link=link),
-        )
     return None
+
+
+def _gym_booking_response(gym: Gym) -> tuple[str, str]:
+    link = _booking_link_for_gym(gym)
+    return (
+        t("en", "book_link_once", link=link),
+        t("sv", "book_link_once", link=link),
+    )
 
 
 def _respond_for_profile_flow(
@@ -647,17 +752,20 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
     responses: List[str] = []
     options: List[ChatOption] = []
 
+    if not request.session_id and not message_text and not action:
+        return ChatResponse(
+            session_id=session_id,
+            messages=_initial_messages(requested_lang),
+            language=requested_lang,
+        )
+
     lead_service = LeadService(db)
     conversation_service = ConversationService(db)
     lead = lead_service.get_lead_by_messenger_id(sender_id)
-    active_gyms = _get_active_gyms(db)
-    print("ACTIVE GYMS:", [(gym.id, gym.name, gym.slug, gym.is_active, gym.booking_url) for gym in active_gyms])
-    print("=== CHAT ENDPOINT HIT ===")
-    print("ACTIVE GYMS:", [(gym.id, gym.name, gym.slug, gym.is_active, gym.booking_url) for gym in active_gyms])
-    print("CURRENT STATE:", lead.conversation_state if lead else None)
-    print("SELECTED GYM ID:", lead.selected_gym_id if lead else None)
     if not message_text and not action and not lead:
         return ChatResponse(session_id=session_id, messages=_initial_messages(requested_lang), language=requested_lang)
+
+    active_gyms = _get_active_gyms(db)
 
     if not lead:
         lead = _create_web_lead(lead_service, sender_id, requested_lang)
@@ -761,7 +869,6 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             lang,
             "booking",
         )
-        print("GYM OPTIONS:", options)
         db.commit()
         return _response_from_state(session_id, responses, lead, current_gym, options=options)
 
@@ -812,7 +919,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             return _response_from_state(session_id, responses, lead, current_gym)
 
         if pending_question:
-            reference_response = _gym_reference_response(current_gym, pending_question)
+            reference_response = _gym_contact_or_location_response(current_gym, pending_question)
             if reference_response:
                 resp_en, resp_sv = reference_response
                 lead.conversation_state = "answering_questions"
@@ -885,6 +992,13 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
     if inbound_text:
         _save_inbound_message(conversation_service, lead, sender_id, inbound_text)
 
+    mentioned_gyms = _matched_gyms(active_gyms, message_text or inbound_text)
+    mentioned_gym = mentioned_gyms[0] if mentioned_gyms else None
+    if _should_switch_selected_gym(current_gym, mentioned_gyms):
+        lead.selected_gym_id = mentioned_gym.id
+        current_gym = mentioned_gym
+    resolved_gym = mentioned_gym or current_gym
+
     status = _profile_status(lead)
     if status:
         _update_profile_from_message(lead, message_text or inbound_text)
@@ -916,14 +1030,32 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         db.commit()
         return _response_from_state(session_id, responses, lead, current_gym)
 
+    if resolved_gym:
+        reference_response = _gym_contact_or_location_response(resolved_gym, message_text or inbound_text)
+        if reference_response:
+            resp_en, resp_sv = reference_response
+            _append_bot_message(
+                responses,
+                conversation_service,
+                lead,
+                sender_id,
+                lang,
+                resp_en,
+                resp_sv,
+                commit=False,
+                intent="gym_reference",
+            )
+            db.commit()
+            return _response_from_state(session_id, responses, lead, current_gym)
+
     analysis = await chat_handler.analyze_message(
         user_message=message_text or inbound_text,
         conversation_state=current_state,
         language=lang,
-        selected_gym_id=current_gym.id if current_gym else None,
+        selected_gym_id=resolved_gym.id if resolved_gym else None,
     )
 
-    if not current_gym and len(active_gyms) > 1 and _is_location_specific_question(message_text or inbound_text, analysis.intent):
+    if not resolved_gym and len(active_gyms) > 1 and _is_location_specific_question(message_text or inbound_text, analysis.intent):
         _set_gym_selection_state(
             lead,
             "booking" if analysis.intent == "book" else "question",
@@ -940,26 +1072,26 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         db.commit()
         return _response_from_state(session_id, responses, lead, current_gym, options=options)
 
-    if current_gym:
-        reference_response = _gym_reference_response(current_gym, message_text or inbound_text)
-        if reference_response:
-            resp_en, resp_sv = reference_response
-            if analysis.intent == "book":
-                lead.notes = "waiting_for_calendar_booking"
-                lead.conversation_state = "recommending_booking"
-            _append_bot_message(
-                responses,
-                conversation_service,
-                lead,
-                sender_id,
-                lang,
-                resp_en,
-                resp_sv,
-                commit=False,
-                intent="gym_reference",
-            )
-            db.commit()
-            return _response_from_state(session_id, responses, lead, current_gym)
+    if resolved_gym and analysis.intent == "book":
+        resp_en, resp_sv = _gym_booking_response(resolved_gym)
+        if mentioned_gym or not current_gym:
+            lead.selected_gym_id = resolved_gym.id
+            current_gym = resolved_gym
+        lead.notes = "waiting_for_calendar_booking"
+        lead.conversation_state = "recommending_booking"
+        _append_bot_message(
+            responses,
+            conversation_service,
+            lead,
+            sender_id,
+            lang,
+            resp_en,
+            resp_sv,
+            commit=False,
+            intent="gym_reference",
+        )
+        db.commit()
+        return _response_from_state(session_id, responses, lead, current_gym)
 
     if analysis.fast_path_response:
         ai_response = analysis.fast_path_response
@@ -974,18 +1106,18 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             customer_info={
                 "name": lead.name,
                 "phone": lead.phone,
-                "selected_gym": current_gym.name if current_gym else None,
-                "gym_location": current_gym.location if current_gym else None,
-                "gym_phone": current_gym.phone if current_gym else None,
+                "selected_gym": resolved_gym.name if resolved_gym else None,
+                "gym_location": resolved_gym.location if resolved_gym else None,
+                "gym_phone": resolved_gym.phone if resolved_gym else None,
             },
             conversation_state=current_state,
             language=lang,
-            selected_gym_id=current_gym.id if current_gym else None,
+            selected_gym_id=resolved_gym.id if resolved_gym else None,
             analysis=analysis,
         )
 
     if ai_response.get("should_proceed") and ai_response.get("intent") == "book":
-        if not current_gym and len(active_gyms) > 1:
+        if not resolved_gym and len(active_gyms) > 1:
             _set_gym_selection_state(lead, "booking")
             options = _append_gym_selection_prompt(
                 responses,
@@ -998,7 +1130,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             db.commit()
             return _response_from_state(session_id, responses, lead, current_gym, options=options)
 
-        current_gym = current_gym or _auto_select_single_gym(lead, active_gyms)
+        current_gym = resolved_gym or current_gym or _auto_select_single_gym(lead, active_gyms)
         if not current_gym:
             options = _append_gym_selection_prompt(
                 responses,
@@ -1011,6 +1143,8 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             _set_gym_selection_state(lead, "booking")
             db.commit()
             return _response_from_state(session_id, responses, lead, current_gym, options=options)
+        if mentioned_gym or not lead.selected_gym_id:
+            lead.selected_gym_id = current_gym.id
         resp_en = t("en", "book_link_once", link=_booking_link_for_gym(current_gym))
         resp_sv = t("sv", "book_link_once", link=_booking_link_for_gym(current_gym))
         lead.notes = "waiting_for_calendar_booking"

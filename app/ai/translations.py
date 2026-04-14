@@ -71,3 +71,4 @@ def get(lang: str, key: str, **kwargs) -> str:
     if isinstance(val, str) and kwargs:
         return val.format(**kwargs)
     return val
+

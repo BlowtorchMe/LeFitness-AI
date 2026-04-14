@@ -72,7 +72,11 @@ class ChatHandler:
             )
             t2 = perf_counter()
         else:
-            faq_match = await self.faq_handler.get_match(user_message, selected_gym_id=selected_gym_id)
+            if intent not in {"book", "greeting", "goodbye"}:
+                faq_match = await self.faq_handler.get_match(
+                    user_message,
+                    selected_gym_id=selected_gym_id,
+                )
             t2 = perf_counter()
             if self._should_direct_answer_with_faq(intent, faq_match):
                 fast_path_response = self._build_direct_faq_response(
