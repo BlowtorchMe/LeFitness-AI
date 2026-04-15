@@ -18,6 +18,7 @@ from app.ai.translations import get as t
 from app.database.database import SessionLocal, get_db
 from app.models.conversation import Conversation, ConversationChannel, MessageDirection
 from app.models.gym import Gym
+from app.models.lead import LeadStatus
 from app.services.conversation_service import ConversationService
 from app.services.lead_service import LeadService
 
@@ -32,12 +33,6 @@ BOOKING_STATES = {
     "recommending_booking",
     "collecting_booking_details",
 }
-CALENDAR_CONFIRM_PATTERNS = (
-    r"^(yes|yep|yeah|done|confirmed|scheduled|booked)[.! ]*$",
-    r"^(i('ve| have)?\s+booked(\s+it)?|i\s+booked(\s+it)?|booked\s+it|it's\s+booked|it is booked)[.! ]*$",
-    r"^(i('ve| have)?\s+scheduled(\s+it)?|i\s+scheduled(\s+it)?|scheduled\s+it|done\s+booking)[.! ]*$",
-    r"^(yes[, ]+i('ve| have)?\s+(booked|scheduled)(\s+it)?)[.! ]*$",
-)
 PHONE_PATTERNS = (
     r"\bphone\b",
     r"\bnumber\b",
@@ -313,12 +308,6 @@ def _sanitize_bilingual_output(
     return text_en, text_sv
 
 
-def _is_calendar_confirmation(message_text: str) -> bool:
-    normalized = " ".join((message_text or "").strip().lower().split())
-    if not normalized:
-        return False
-    return any(re.fullmatch(pattern, normalized) for pattern in CALENDAR_CONFIRM_PATTERNS)
-
 
 def _profile_status(lead) -> Optional[str]:
     notes = getattr(lead, "notes", None) or ""
@@ -419,7 +408,9 @@ def _should_send_booking_follow_up(lead, conversations: List[Conversation]) -> b
         return False
     if lead.conversation_state not in {"profile_complete", "recommending_booking", "answering_questions", "selecting_gym"}:
         return False
-    if lead.notes == "calendar_booking_pending_verification":
+    if lead.status == LeadStatus.BOOKED:
+        return False
+    if (lead.notes or "").startswith("calendar_booking_saved:"):
         return False
     last_message_at = conversations[-1].created_at
     if not last_message_at:
@@ -636,6 +627,19 @@ def _find_gym_choice(gyms: List[Gym], action_value: Optional[str], action_label:
     return None
 
 
+def _format_booking_dt(booking_date, lang: str) -> str:
+    if not booking_date:
+        return ""
+    try:
+        day = str(booking_date.day)
+        if lang == "sv":
+            return f"{day} {booking_date.strftime('%B')} kl {booking_date.strftime('%H:%M')}"
+        hour = booking_date.strftime("%I").lstrip("0") or "12"
+        return f"{booking_date.strftime('%B')} {day} at {hour}{booking_date.strftime(':%M %p')}"
+    except Exception:
+        return str(booking_date)
+
+
 def _is_location_specific_question(message_text: str, intent: Optional[str]) -> bool:
     normalized = " ".join((message_text or "").strip().lower().split())
     if not normalized:
@@ -776,9 +780,29 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
     current_gym = _auto_select_single_gym(lead, active_gyms) or _get_gym_by_id(db, lead.selected_gym_id)
     lang = _lang(lead)
 
+    # If the calendar webhook already confirmed a booking, surface that to the user.
+    booking_confirmed_pending = (lead.notes or "").startswith("calendar_booking_saved:")
+
     if not message_text and not action:
         conversations = _load_web_conversations(db, lead.id)
         if conversations:
+            if booking_confirmed_pending:
+                confirm_en = t("en", "booking_confirmed_webhook", dt=_format_booking_dt(lead.booking_date, "en"))
+                confirm_sv = t("sv", "booking_confirmed_webhook", dt=_format_booking_dt(lead.booking_date, "sv"))
+                _save_outbound_message(
+                    conversation_service, lead.id, sender_id, confirm_en, confirm_sv, commit=False
+                )
+                lead.notes = None
+                lead.conversation_state = "answering_questions"
+                db.commit()
+                conversations = _load_web_conversations(db, lead.id)
+                return _response_from_state(
+                    session_id,
+                    [_select_lang_text(lang, confirm_en, confirm_sv)],
+                    lead,
+                    current_gym,
+                    history=_history_from_conversations(conversations),
+                )
             current_state = lead.conversation_state or "welcome"
             if _needs_booking_gym_selection(lead, current_state, active_gyms, current_gym):
                 _set_gym_selection_state(lead, "booking")
@@ -1013,22 +1037,15 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         db.commit()
         return _response_from_state(session_id, responses, lead, current_gym, options=options)
 
-    if lead.notes == "waiting_for_calendar_booking" and _is_calendar_confirmation(message_text or inbound_text):
-        confirm_en = t("en", "booking_confirm_calendar")
-        confirm_sv = t("sv", "booking_confirm_calendar")
+    if booking_confirmed_pending:
+        confirm_en = t("en", "booking_confirmed_webhook", dt=_format_booking_dt(lead.booking_date, "en"))
+        confirm_sv = t("sv", "booking_confirmed_webhook", dt=_format_booking_dt(lead.booking_date, "sv"))
         _append_bot_message(
-            responses,
-            conversation_service,
-            lead,
-            sender_id,
-            lang,
-            confirm_en,
-            confirm_sv,
-            commit=False,
+            responses, conversation_service, lead, sender_id, lang, confirm_en, confirm_sv, commit=False
         )
-        lead.notes = "calendar_booking_pending_verification"
-        db.commit()
-        return _response_from_state(session_id, responses, lead, current_gym)
+        lead.notes = None
+        lead.conversation_state = "answering_questions"
+        # Continue below to also answer any question the user included in this message.
 
     if resolved_gym:
         reference_response = _gym_contact_or_location_response(resolved_gym, message_text or inbound_text)

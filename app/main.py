@@ -5,6 +5,8 @@ import logging
 import threading
 import time
 import uvicorn
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -55,17 +57,35 @@ async def lifespan(app: FastAPI):
     ensure_schema()
     threading.Thread(target=_warmup_faq_background, daemon=True).start()
 
-    # Kolla om minst ett gym har en kalender konfigurerad
+    # Check if at least one active gym has a calendar_id configured in the DB
+    from app.database.database import SessionLocal as _SL
+    from app.models.gym import Gym as _Gym
+    _db = _SL()
+    try:
+        _has_gym_calendar = (
+            _db.query(_Gym)
+            .filter(_Gym.is_active.is_(True), _Gym.calendar_id.isnot(None))
+            .first()
+        ) is not None
+    finally:
+        _db.close()
+
+    logger.info(
+        "Calendar check: service_account=%s webhook_url=%s gym_with_calendar=%s",
+        bool(settings.google_service_account),
+        bool(settings.google_calendar_webhook_url),
+        _has_gym_calendar,
+    )
+
     has_any_calendar = (
         settings.google_service_account
         and settings.google_calendar_webhook_url
-        and (settings.google_calendar_taby_id or settings.google_calendar_varmdo_id)
+        and _has_gym_calendar
     )
 
     if has_any_calendar:
         result = calendar_webhook_service.setup_webhook()
         if result.get("success"):
-            # Schedule webhook renewal every 6 days (cron-like)
             scheduler.add_job(
                 renew_webhook_job,
                 trigger=IntervalTrigger(days=6),
@@ -73,9 +93,9 @@ async def lifespan(app: FastAPI):
                 replace_existing=True
             )
             scheduler.start()
-            logger.info("✅ Calendar webhook set up and auto-renewal scheduled (every 6 days)")
+            logger.info("Calendar webhook set up and auto-renewal scheduled (every 6 days)")
         else:
-            logger.warning(f"Failed to set up calendar webhook: {result.get('error')}")
+            logger.warning("Failed to set up calendar webhook: %s", result.get("error"))
     else:
         logger.info("Calendar webhook not configured - skipping setup")
 
@@ -93,7 +113,8 @@ app = FastAPI(
     title=settings.app_name,
     version="1.0.0",
     debug=settings.debug,
-    lifespan=lifespan
+    lifespan=lifespan,
+    redirect_slashes=False,
 )
 
 # CORS middleware

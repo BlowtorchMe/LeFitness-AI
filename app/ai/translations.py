@@ -22,7 +22,7 @@ TEXTS = {
             f"Hi {name}, just checking in. If you'd still like to try {gym_name or settings.gym_name}, you can book your free {settings.free_trial_days}-day trial here:\n{link}\n\n"
             "If you have any other questions first, just send them here."
         ),
-        "booking_confirm_calendar": "Great! I'll check the calendar and confirm your booking. You should receive a confirmation email shortly!",
+        "booking_confirmed_webhook": lambda dt: f"I can see you've booked your trial for {dt}! We're looking forward to seeing you. You should also receive a confirmation email from Google Calendar.",
         "book_link_once": lambda link: f"Great! Please use this link to book your appointment at a time that works best for you:\n{link}\n\nOnce you've booked, I'll confirm everything for you!",
         "service_overview_prompt": "Of course. Ask anything you want. If helpful, you can ask about opening hours, prices, classes, equipment, parking, or personal training.",
         "select_gym_booking": "Perfect. Which gym would you like to book for?",
@@ -49,7 +49,7 @@ TEXTS = {
             f"Hej {name}, jag ville bara följa upp. Om du fortfarande vill prova {gym_name or settings.gym_name} kan du boka din gratis {settings.free_trial_days}-dagars provperiod här:\n{link}\n\n"
             "Om du vill fråga något mer först är det bara att skriva här."
         ),
-        "booking_confirm_calendar": "Bra! Jag kollar kalendern och bekräftar din bokning. Du får en bekräftelse via e-post snart!",
+        "booking_confirmed_webhook": lambda dt: f"Jag ser att du har bokat din provperiod {dt}! Vi ser fram emot att träffa dig. Du borde också ha fått en bekräftelse via e-post från Google Calendar.",
         "book_link_once": lambda link: f"Bra! Använd denna länk för att boka din tid när det passar dig:\n{link}\n\nNär du bokat bekräftar jag allt!",
         "service_overview_prompt": "Självklart. Fråga vad du vill. Om det hjälper kan du fråga om öppettider, priser, klasser, utrustning, parkering eller personlig träning.",
         "select_gym_booking": "Perfekt. Vilket gym vill du boka för?",

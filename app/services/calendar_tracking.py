@@ -6,13 +6,9 @@ from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 from app.models.lead import Lead
 from app.integrations.google_calendar import GoogleCalendar
+from app.models.gym import Gym
 from app.services.lead_service import LeadService
-from app.services.gym_calendar_config import get_gym_calendar_config
 from datetime import datetime, timedelta
-
-
-# Alla konfigurerade gym-slugs som har kalendrar
-ALL_GYM_SLUGS = ["taby", "varmdo"]
 
 
 class CalendarTrackingService:
@@ -23,20 +19,21 @@ class CalendarTrackingService:
         self.lead_service = LeadService(db)
 
     def _get_calendars(self) -> List[GoogleCalendar]:
-        """
-        Hämtar GoogleCalendar-instanser för alla konfigurerade gym.
-        Returnerar en lista med kalendrar som har fungerande service.
-        """
+        """Returns GoogleCalendar instances for all active gyms with a calendar_id."""
         calendars = []
-        for gym_slug in ALL_GYM_SLUGS:
+        gyms = (
+            self.db.query(Gym)
+            .filter(Gym.is_active.is_(True), Gym.calendar_id.isnot(None))
+            .all()
+        )
+        for gym in gyms:
+            if not gym.calendar_id:
+                continue
             try:
-                config = get_gym_calendar_config(gym_slug)
-                if not config.calendar_id:
-                    continue
-                cal = GoogleCalendar(calendar_id=config.calendar_id)
+                cal = GoogleCalendar(calendar_id=gym.calendar_id)
                 if cal.service:
                     calendars.append(cal)
-            except (ValueError, Exception):
+            except Exception:
                 continue
         return calendars
 

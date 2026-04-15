@@ -1,289 +1,346 @@
 ## Overview
 
-This repository contains the FastAPI backend for the LE Fitness chatbot and booking system.
-This README focuses on how to run it, configure it, and connect Meta and Google Calendar.
+This repository contains the FastAPI backend for the LE Fitness AI chatbot and booking system.
+The companion frontend (`LeFitness-AI-Frontend/`) is a React + Vite + TypeScript app in the sibling directory.
 
 ## Tech Stack
 
-- **Backend**: FastAPI (Python)
-- **Database**: PostgreSQL (Neon as cloud DB); pgvector for FAQ embeddings
-- **Deployment**: Vercel (serverless)
-- **AI**: OpenAI (chat + FAQ embeddings via Haystack)
-- **FAQ**: DB table `faqs` + pgvector RAG (embed query → retrieve top answer)
-- **Integrations**:
-  - Meta (Facebook/Instagram) Graph API
-  - Google Calendar (service account + appointment schedule link)
+- **Backend**: FastAPI (Python 3.10+)
+- **Database**: PostgreSQL (Neon recommended); pgvector extension for FAQ embeddings
+- **AI**: OpenAI (chat completions + embeddings via Haystack)
+- **Integrations**: Meta Graph API (Facebook/Instagram DMs), Google Calendar (service account + push notifications)
+- **Deployment**: Vercel (serverless) or any server running uvicorn
 
-## 1. Install Dependencies
+---
+
+## 1. Prerequisites
+
+- Python 3.10+
+- Node.js 18+ (for frontend)
+- A [Neon](https://neon.tech) PostgreSQL database (free tier works)
+- An OpenAI API key
+- (Optional) A Google Cloud project with Calendar API enabled
+- (Optional) A Meta Developer App for Facebook/Instagram
+
+---
+
+## 2. Environment Variables
+
+Copy the example and fill in your values:
 
 ```bash
-pip install -r requirements.txt
-```
-
-Use Python 3.10+.
-
-## 2. Environment Configuration
-
-Copy the example file and edit:
-
-```bash
-# Windows PowerShell
-Copy-Item .env.example .env
-
-# Linux/Mac
 cp .env.example .env
 ```
 
-### 2.1 Core settings
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes | Neon (or any PostgreSQL) connection string |
+| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `ADMIN_PASSWORD` | Yes | Password for the admin panel |
+| `ADMIN_SESSION_SECRET` | Yes | Random secret for admin session cookies |
+| `GOOGLE_SERVICE_ACCOUNT` | For calendar | Service account JSON (file path or inline JSON string) |
+| `GOOGLE_CALENDAR_WEBHOOK_URL` | For calendar | Public URL where Google will POST notifications, e.g. `https://your-domain.com/webhooks/calendar` |
+| `META_ACCESS_TOKEN` | For Meta | Facebook Page access token |
+| `META_VERIFY_TOKEN` | For Meta | Webhook verify token (any string you choose) |
+| `META_APP_ID` | For Meta | Meta App ID |
+| `META_APP_SECRET` | For Meta | Meta App Secret |
+| `META_PAGE_ID` | For Meta | Facebook Page ID |
+| `USE_MOCK_APIS` | No | Set `true` to skip real Meta/Google calls during local dev |
+| `TEST_MODE` | No | Set `true` to enable additional test shortcuts |
 
-See `.env.example` for the full list of variables.
-Set at least:
+There are no per-gym calendar env vars. Calendar IDs and booking URLs are stored in the database via the admin panel.
 
-- `OPENAI_API_KEY`
-- `DATABASE_URL` (Neon connection string)
-- Basic gym info (`GYM_NAME`, `GYM_EMAIL`, etc.)
+---
 
-For local testing with mock Meta, set:
+## 3. Database Setup
 
-- `USE_MOCK_APIS=true`
-- `TEST_MODE=true`
+### 3.1 Create a Neon database
 
-### 2.2 How to get Meta (Facebook / Instagram) values
+1. Sign up at [neon.tech](https://neon.tech).
+2. Create a new project and database.
+3. Copy the connection string (SQLAlchemy format) and set it as `DATABASE_URL`.
 
-Steps to get the values for the Meta-related env vars:
+### 3.2 Initialize tables
 
-1. **Create a Facebook App**
-   - Go to Meta for Developers and create a new app (type “Business” or similar).
-   - Add the “Messenger” product to this app.
-   - In the app settings, you will see:
-     - `App ID` → use for `META_APP_ID`
-     - `App Secret` → use for `META_APP_SECRET`
-
-2. **Connect a Facebook Page**
-   - In the Messenger settings for your app, connect the Facebook Page you want to use.
-   - Generate a **Page Access Token** for that page.
-   - Use that token as `META_ACCESS_TOKEN`.
-   - The Page ID is shown in the same area; use it for `META_PAGE_ID`.
-   - This same page can receive both Facebook Messenger and Instagram Direct messages when configured.
-
-3. **Set the webhook URL and verify token**
-   - In Messenger → Webhooks, add a callback URL:
-     - Callback URL: `https://your-domain.com/webhooks/meta` (or your local tunnel URL)
-     - Verify Token: choose any string you like, and put the same value into `.env` as `META_VERIFY_TOKEN`.
-   - Select the subscriptions (messages, messaging_postbacks, messaging_referrals, message_deliveries, message_reads).
-   - Save and verify.
-
-4. **Enable Instagram messaging (optional but recommended)**
-   - In the same app, add the **Instagram** product.
-   - In Instagram settings, connect the **Instagram Business account** that is linked to your Facebook Page.
-   - Make sure “Allow access to messages” is turned on for the Instagram account.
-   - In Webhooks, also enable the Instagram field (for example `instagram_messages`), so Instagram DMs are sent to the same `/webhooks/meta` endpoint.
-
-5. **Subscribe the Page to the App**
-   - Still in Messenger / Instagram settings, subscribe your Page (and Instagram account, if used) to this app so that messages from users are delivered to this webhook.
-
-For console-only testing, you can skip all of this and just put dummy values for Meta fields while keeping `USE_MOCK_APIS=true`.
-
-### 2.3 How to get Google Calendar values
-
-Steps to prepare Google and fill the calendar-related env vars:
-
-1. **Create a Google Cloud project**
-   - Go to Google Cloud Console.
-   - Create a new project (or choose an existing project for this bot).
-
-2. **Enable Google Calendar API**
-   - In the Cloud Console, go to “APIs & Services” → “Library”.
-   - Search for “Google Calendar API” and enable it for this project.
-
-3. **Create a service account**
-   - Go to “APIs & Services” → “Credentials”.
-   - Click “Create Credentials” → “Service account”.
-   - Give it a name (e.g. `le-fitness-bot`).
-   - After creation, go into the service account details and create a **JSON key**.
-   - Download the JSON key file.
-   - For local dev, you can point `GOOGLE_SERVICE_ACCOUNT` to the file path.
-   - For Vercel, open the JSON file, copy its full contents, and paste it as a single-line JSON string into `GOOGLE_SERVICE_ACCOUNT` env.
-
-4. **Choose or create the Calendar**
-   - In Google Calendar (web UI), create or pick the calendar you want to use for bookings.
-   - Go to that calendar’s settings:
-     - Under “Integrate calendar”, find the **Calendar ID** (it usually looks like `something@group.calendar.google.com`).
-     - Put that into `.env` as `GOOGLE_CALENDAR_ID`.
-
-5. **Share the Calendar with the service account**
-   - Still in the calendar settings, under “Share with specific people or groups”:
-     - Add the service account email (from the JSON key).
-     - Give it at least “Make changes to events” permission.
-
-6. **Create an Appointment Schedule**
-   - In Google Calendar (web UI), click on a time slot and choose “Appointment schedule” (or “Create” → “Appointment schedule”, depending on UI).
-   - Configure your booking rules (duration, available days, times, etc.).
-   - Save it.
-   - Open the appointment schedule and copy the **booking page link** (the link you would send to customers).
-   - Put that URL into `.env` as `GOOGLE_APPOINTMENT_SCHEDULE_LINK`.
-
-7. **Set the webhook URL**
-   - Decide the public URL where your backend will be reachable.
-   - Set `.env`:
-     - `GOOGLE_CALENDAR_WEBHOOK_URL=https://your-domain.com/webhooks/calendar`
-   - On startup, the backend uses the service account to register a watch on `GOOGLE_CALENDAR_ID` pointing to that URL.
-
-## 3. Database (Neon)
-
-Use Neon as the PostgreSQL backend:
-
-1. Create a project and database in Neon.
-2. In the Neon dashboard, copy the connection string (Python / SQLAlchemy format).
-3. Set `DATABASE_URL` in `.env`, for example:
-
-```env
-DATABASE_URL=postgresql://USER:PASSWORD@ep-example-123456.neon.tech/neondb
-```
-
-### Initialize tables
+This command is safe to run repeatedly — it creates missing tables without dropping existing data:
 
 ```bash
-python -c "from app.database.database import init_db; init_db()"
+python -c "from app.database.database import ensure_schema; ensure_schema()"
 ```
 
-This creates the required tables (`leads`, `bookings`, `conversations`, `faqs`) and enables the `vector` extension for FAQ embeddings.
+> **Warning:** `init_db()` drops and recreates all tables. Never run it on a database with real data.
+
+---
 
 ## 4. Running Locally
 
-Start the FastAPI app:
+### Backend
 
 ```bash
-uvicorn app.main:app --reload
+cd LeFitness-AI
+
+# Create and activate a virtual environment (first time)
+python -m venv .venv
+.\.venv\Scripts\activate   # Windows PowerShell
+source .venv/bin/activate  # Linux/Mac
+
+pip install -r requirements.txt
+
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Health check:
-- Open `http://localhost:8000/` in a browser or use `curl`.
+API docs: http://127.0.0.1:8000/docs
 
-API docs:
-- `http://localhost:8000/docs`
+### Frontend
 
-### 4.5 FAQ (database + RAG)
+```bash
+cd LeFitness-AI-Frontend
+npm install
+npm run dev
+```
 
-FAQs live in the `faqs` table and are searched via pgvector. Chat uses FAQ first, then the general AI prompt.
+Chat UI: http://127.0.0.1:5173
 
-**Seed FAQs:** Import `faq_seed.json` (project root) via the FAQ admin UI or `POST /api/faq/import` with the JSON array; use `?reindex=true` to run the indexer after import.
+The frontend expects the backend at `http://127.0.0.1:8000` by default. To point it at a different backend (e.g. a tunnel URL), set `VITE_API_URL` in `LeFitness-AI-Frontend/.env`.
 
-**Reindex:** Use the "Reindex" button in the FAQ admin UI, or `POST /api/faq/reindex`, or run:
+---
+
+## 5. Admin Panel
+
+Visit http://127.0.0.1:5173/admin/login. Log in with `ADMIN_PASSWORD`.
+
+### 5.1 Managing Gyms
+
+Go to **Admin → Gyms**. Each gym has:
+
+| Field | Description |
+|---|---|
+| Name | Display name |
+| Slug | URL-safe identifier, e.g. `taby` |
+| Location | Address shown in chat |
+| Phone | Phone number shown in chat |
+| Booking URL | Appointment schedule link shown to users (see Section 6.3) |
+| Calendar ID | Google Calendar ID for push notifications (see Section 6.2) |
+| Active | Only active gyms receive calendar notifications and appear in chat |
+
+After adding or editing a gym, the backend automatically re-registers Google Calendar watchers in the background.
+
+### 5.2 Managing FAQs
+
+Go to **Admin → FAQs**. You can add FAQs one at a time or bulk-import from a JSON file.
+
+**Bulk import format:**
+
+```json
+[
+  {
+    "question": "What are your opening hours?",
+    "answer": "We are open 06:00–22:00 on weekdays and 08:00–20:00 on weekends.",
+    "category": "hours"
+  }
+]
+```
+
+Use the **Import JSON** button on the FAQ list page, then click **Reindex** to embed the new FAQs into pgvector so they are searchable by the chatbot.
+
+Alternatively, from the terminal:
 
 ```bash
 python -m app.faq_indexer
 ```
 
-## 5. Testing web chat (no Meta)
+---
 
-You can test the full chat flow using only the web chat page, without any Meta (Facebook/Instagram) setup.
+## 6. Google Calendar Setup
 
-**Required in `.env`:**
-- `OPENAI_API_KEY` – for AI responses
-- `DATABASE_URL` – for leads and conversations
+This section explains how to set up Google Calendar so that when a user books an appointment, the chatbot automatically receives a notification and sends the user a confirmation message.
 
-**Optional:** `GYM_NAME`, `GOOGLE_APPOINTMENT_SCHEDULE_LINK` (for a real booking link in messages). Leave all Meta vars (`META_ACCESS_TOKEN`, etc.) empty.
+### 6.1 Create a Google Cloud project and enable the Calendar API
 
-**Steps:**
+1. Go to [Google Cloud Console](https://console.cloud.google.com/).
+2. Create a new project (e.g. `le-fitness`).
+3. Go to **APIs & Services → Library**, search for **Google Calendar API**, and enable it.
 
-1. In `Fitness-Chatbot`, create `.env` with at least `OPENAI_API_KEY` and `DATABASE_URL`. No Meta or Google vars needed for web-only testing.
+### 6.2 Create a service account
 
-2. Initialize the database (if not already):
-   ```bash
-   python -c "from app.database.database import init_db; init_db()"
-   ```
+1. Go to **APIs & Services → Credentials → Create Credentials → Service account**.
+2. Give it a name (e.g. `le-fitness-bot`) and click through to finish.
+3. Open the service account, go to the **Keys** tab, click **Add Key → Create new key → JSON**.
+4. Download the JSON file. Keep it safe — it grants access to your calendars.
 
-3. Start the backend:
-   ```bash
-   uvicorn app.main:app --reload
-   ```
-
-4. In another terminal, start the chat frontend (e.g. from the `Fitness-Chatbot-UI` sibling project):
-   ```bash
-   cd ../Fitness-Chatbot-UI
-   npm install
-   npm run dev
-   ```
-
-5. Open http://localhost:5173 and click **Start chat**. The flow is: welcome → name, email, phone → booking link. All traffic uses `POST /api/chat`; no Meta APIs or webhooks are involved.
-
-## 6. Meta Webhook Integration (Live)
-
-Once the backend is deployed to a public URL:
-
-1. In `.env` on the server/Vercel, set real Meta credentials and disable mocks:
-
+**For local development:**
+Set `GOOGLE_SERVICE_ACCOUNT` to the file path, e.g.:
 ```env
-USE_MOCK_APIS=false
-TEST_MODE=false
+GOOGLE_SERVICE_ACCOUNT=/path/to/service-account.json
 ```
 
-2. In the Meta App dashboard:
-   - Set the webhook callback URL to `https://your-domain.com/webhooks/meta`
-   - Set the verify token to `META_VERIFY_TOKEN`
-   - Verify the webhook
-   - Subscribe the page to the app for messaging events
+**For Vercel (or any cloud deployment):**
+Open the JSON file, copy the entire contents, and paste it as a single-line JSON string:
+```env
+GOOGLE_SERVICE_ACCOUNT={"type":"service_account","project_id":"...","private_key":"-----BEGIN RSA PRIVATE KEY-----\n..."}
+```
 
-3. Connect the page to the app so that messages from users are delivered to this backend.
+Note the service account's email address — it looks like `le-fitness-bot@your-project.iam.gserviceaccount.com`. You will need it in the next step.
 
-The conversation flow matches the web chat:
-- Welcome message
-- Profile gathering (name, email, phone) using plain text prompts
-- Booking recommendation with a plain text appointment schedule URL
+### 6.3 Identify the correct Calendar ID
 
-## 7. Google Calendar Webhook Behavior
+> **Important — Google free accounts:** Google Appointment Schedules on free (non-Workspace) accounts always link to the **primary calendar** of the account that created them. The calendar ID for the primary calendar is simply the **Gmail address** of that account, e.g. `yourname@gmail.com`.
+>
+> If you use a group/shared calendar ID (`something@group.calendar.google.com`) but the appointment schedule is owned by a Gmail account, the bookings will appear on the Gmail account's primary calendar — not the group calendar — and the bot will not see them.
+>
+> **Rule:** Use the Gmail address as the Calendar ID in the admin panel for any gym whose appointment schedule was created by a Gmail account.
 
-On startup, the backend:
-- Authenticates using the Google service account.
-- Registers a watch on `GOOGLE_CALENDAR_ID` using `GOOGLE_CALENDAR_WEBHOOK_URL`.
-- Schedules automatic renewal of the watch every few days.
+To confirm which calendar the bookings appear on:
+1. Make a test booking using your appointment schedule link.
+2. Open Google Calendar and check which calendar the new event appears on.
+3. Use the settings of that specific calendar to find its Calendar ID.
 
-When a user books through your `GOOGLE_APPOINTMENT_SCHEDULE_LINK`:
-- Google Calendar creates the event.
-- A webhook is sent to `/webhooks/calendar`.
-- The backend:
-  - Saves the booking to the database.
-  - Tries to match it to an existing lead by email if possible.
-  - Can send a confirmation message in chat when it detects the booking.
+For group/shared calendars:
+- In Google Calendar, open the calendar's settings.
+- Under **Integrate calendar**, copy the **Calendar ID** (e.g. `something@group.calendar.google.com`).
 
-No Twilio or SMTP configuration is required; confirmations rely on Google Calendar’s own email notifications and the chat messages.
+### 6.4 Share the calendar with the service account
+
+The service account must have access to the calendar where bookings appear.
+
+1. In Google Calendar, open the settings of the correct calendar (see 6.3).
+2. Under **Share with specific people or groups**, click **Add people**.
+3. Enter the service account email (from step 6.2).
+4. Set permission to **Make changes to events**.
+5. Save.
+
+### 6.5 Create an Appointment Schedule (booking link)
+
+1. In Google Calendar, click **Create → Appointment schedule** (or click a time slot and choose **Appointment schedule**).
+2. Configure the schedule: duration, available days and hours, title, etc.
+3. Save, then open the schedule and copy the **Booking page link**.
+4. In the admin panel, paste this URL into the **Booking URL** field for the corresponding gym. This is the link the chatbot will send to users.
+
+### 6.6 Configure the webhook URL
+
+The backend must be reachable from the internet for Google to send push notifications.
+
+1. Deploy the backend, or use a tunnel for local testing (e.g. [ngrok](https://ngrok.com): `ngrok http 8000`).
+2. Set in `.env`:
+   ```env
+   GOOGLE_CALENDAR_WEBHOOK_URL=https://your-domain.com/webhooks/calendar
+   ```
+3. Restart the backend. On startup, it will register a watch for every active gym that has a Calendar ID set.
+
+### 6.7 Add gyms in the admin panel
+
+For each gym:
+1. Go to **Admin → Gyms → Add Gym**.
+2. Fill in the name, slug, location, phone, booking URL (from 6.5), and Calendar ID (from 6.3).
+3. Make sure **Active** is checked.
+4. Save.
+
+The backend will immediately register a Google Calendar watch for the new gym.
+
+### How it works end-to-end
+
+1. A user chats with the bot and receives the appointment schedule link.
+2. The user books an appointment at that link.
+3. Google Calendar creates an event and sends a push notification to `/webhooks/calendar`.
+4. The backend saves the booking to the database, matches it to the lead by email (if available), and updates the lead's status.
+5. Within a few seconds, the chatbot sends the user a confirmation message without requiring any additional input from them.
+
+---
+
+## 7. Meta (Facebook / Instagram) Setup
+
+### 7.1 Create a Meta App
+
+1. Go to [Meta for Developers](https://developers.facebook.com/) and create a new app (type: **Business**).
+2. Add the **Messenger** product to the app.
+3. Note the **App ID** (`META_APP_ID`) and **App Secret** (`META_APP_SECRET`) from app settings.
+
+### 7.2 Connect a Facebook Page
+
+1. In Messenger settings, connect your Facebook Page.
+2. Generate a **Page Access Token** → `META_ACCESS_TOKEN`.
+3. Note the **Page ID** → `META_PAGE_ID`.
+
+### 7.3 Register the webhook
+
+1. In Messenger → Webhooks, set:
+   - Callback URL: `https://your-domain.com/webhooks/meta`
+   - Verify Token: any string you choose → set the same value as `META_VERIFY_TOKEN`
+2. Verify the webhook. Subscribe to: `messages`, `messaging_postbacks`, `messaging_referrals`, `message_deliveries`, `message_reads`.
+
+### 7.4 Instagram (optional)
+
+1. In the Meta App, add the **Instagram** product.
+2. Connect the Instagram Business account linked to your Facebook Page.
+3. Enable "Allow access to messages" on the Instagram account.
+4. Add the `instagram_messages` webhook subscription.
+
+Instagram DMs arrive at the same `/webhooks/meta` endpoint.
+
+---
 
 ## 8. Deployment to Vercel
 
-Basic flow:
+1. Push the `LeFitness-AI` directory to a GitHub repository.
+2. Import the project in [Vercel](https://vercel.com/).
+3. In Vercel project settings, add all required environment variables (see Section 2).
+4. Set:
+   - **Framework Preset**: Other
+   - **Root Directory**: `LeFitness-AI` (if the repo contains only the backend)
+5. Deploy. Vercel uses `app.main:app` as the serverless entry point automatically.
 
-1. Push the repository to GitHub.
-2. Import the project in Vercel.
-3. In Vercel project settings, add all required environment variables from `.env` (especially `OPENAI_API_KEY`, `DATABASE_URL`, Meta, and Google settings).
-4. Vercel will build and deploy automatically.
+> Do not configure uvicorn manually on Vercel. It is only needed for local development.
 
-Recommended Vercel settings:
-- Install Command: `pip install -r requirements.txt`
-- Build Command: leave empty (Vercel handles Python serverless functions)
-- Output Directory: leave empty
+For the frontend (`LeFitness-AI-Frontend`), deploy it as a separate Vercel project and set `VITE_API_URL` to the backend's Vercel URL.
 
-Do not start `uvicorn` yourself on Vercel; `app.main:app` is used as the serverless entrypoint.
+---
 
-## 9. API Endpoints (Backend)
+## 9. FAQ Indexing
 
-- `GET /` – health check
-- `GET /api/leads` – list leads
-- `GET /api/bookings` – list bookings
-- `POST /api/chat` – web chat (for chat page instead of Messenger/Instagram)
-- **FAQ**
-  - `GET /api/faq` – list FAQs (paginated; query: `page`, `size`)
-  - `GET /api/faq/{id}` – get one FAQ
-  - `POST /api/faq` – add one FAQ
-  - `PUT /api/faq/{id}` – update FAQ
-  - `DELETE /api/faq/{id}` – delete FAQ
-  - `POST /api/faq/import` – import FAQs from JSON array (optional `?reindex=true`)
-  - `POST /api/faq/reindex` – run FAQ indexer (DB → pgvector)
-- `POST /webhooks/meta` – Meta webhook handler
-- `GET /webhooks/meta` – Meta webhook verification
-- `POST /webhooks/calendar` – Google Calendar webhook handler
+FAQs are stored in the database and embedded into pgvector for semantic search. The chatbot queries embeddings first before falling back to the LLM.
 
-### Web chat (`POST /api/chat`)
+After adding or editing FAQs via the admin panel, click **Reindex** on the FAQ list page, or run:
 
-Body: `{ "session_id": "optional", "message": "optional" }`. First request without `message` returns welcome + first profile question. Response: `{ "session_id": "...", "messages": ["..."] }`. Use the same `session_id` for the rest of the conversation. The companion React app is in the `Fitness-Chatbot-UI` project (sibling directory).
+```bash
+python -m app.faq_indexer
+```
 
+On a fresh database, the vector store is empty until this runs. The chat will work via LLM fallback but will not use FAQ retrieval.
+
+---
+
+## 10. API Reference
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Health check |
+| `POST` | `/api/chat/` | Web chat endpoint |
+| `GET` | `/api/leads` | List leads (admin) |
+| `GET` | `/api/bookings` | List bookings (admin) |
+| `GET` | `/api/faq` | List FAQs |
+| `POST` | `/api/faq` | Create FAQ |
+| `PUT` | `/api/faq/{id}` | Update FAQ |
+| `DELETE` | `/api/faq/{id}` | Delete FAQ |
+| `POST` | `/api/faq/import` | Bulk import FAQs from JSON array |
+| `POST` | `/api/faq/reindex` | Reindex FAQs into pgvector |
+| `GET` | `/api/gyms` | List gyms |
+| `POST` | `/api/gyms` | Create gym |
+| `PUT` | `/api/gyms/{id}` | Update gym |
+| `DELETE` | `/api/gyms/{id}` | Deactivate gym |
+| `GET` | `/webhooks/meta` | Meta webhook verification |
+| `POST` | `/webhooks/meta` | Meta webhook handler |
+| `POST` | `/webhooks/calendar` | Google Calendar push notification handler |
+
+**Web chat request:**
+
+```json
+{ "session_id": "optional-uuid", "message": "optional user text" }
+```
+
+**Web chat response:**
+
+```json
+{ "session_id": "uuid", "messages": ["Bot reply..."] }
+```
+
+Omit `message` on the first request to receive the welcome message and initial profile question. Reuse the same `session_id` for the full conversation.

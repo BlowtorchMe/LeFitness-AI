@@ -31,6 +31,7 @@ def init_db():
         conn.execute(text("DROP TABLE IF EXISTS faqs CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS gyms CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS faq_gyms CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS haystack_documents CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS conversationchannel CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS messagedirection CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS leadstatus CASCADE"))
@@ -42,11 +43,8 @@ def init_db():
     ensure_schema()
 
 def ensure_schema() -> None:
-    """Apply lightweight non-destructive schema updates for local development."""
+    """Create any missing tables. Safe to call on every startup."""
     Base.metadata.create_all(bind=engine)
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS selected_gym_id INTEGER"))
-        conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS gym_id INTEGER"))
 
 
 def get_db() -> Session:

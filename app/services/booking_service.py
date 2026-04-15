@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.booking import Booking, BookingStatus, AppointmentType
 from app.integrations.google_calendar import GoogleCalendar
 from datetime import datetime, timedelta
-from app.services.gym_calendar_config import get_gym_calendar_config
+from app.models.gym import Gym
 
 
 class BookingService:
@@ -151,9 +151,9 @@ class BookingService:
         return slots
 
     def _get_calendar(self, gym_slug: str) -> GoogleCalendar:
-        gym_config = get_gym_calendar_config(gym_slug)
+        gym = self.db.query(Gym).filter(Gym.slug == gym_slug).first()
 
-        if not gym_config.calendar_id:
+        if not gym or not gym.calendar_id:
             raise ValueError(f"No Google Calendar configured for gym: {gym_slug}")
 
-        return GoogleCalendar(calendar_id=gym_config.calendar_id)
+        return GoogleCalendar(calendar_id=gym.calendar_id)

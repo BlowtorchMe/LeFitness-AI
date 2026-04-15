@@ -13,7 +13,8 @@ from app.models.booking import AppointmentType
 from app.models.conversation import ConversationChannel, MessageDirection
 from app.models.lead import LeadStatus
 from app.services.booking_service import BookingService
-from app.services.gym_calendar_config import get_gym_calendar_config
+from app.models.gym import Gym
+from app.database.database import SessionLocal
 from app.services.lead_service import LeadService
 from app.services.conversation_service import ConversationService
 
@@ -129,16 +130,20 @@ class ConversationFlow:
         Get Google Calendar Appointment Schedule booking page link.
         Använder gym_slug för att hämta rätt kalender-länk för respektive gym.
         """
-        # Försök hämta appointment schedule-länk för det valda gymmet
+        # Look up the gym's booking_url and calendar_id from the DB
         if gym_slug:
             try:
-                config = get_gym_calendar_config(gym_slug)
-                if config.appointment_schedule_link:
-                    return config.appointment_schedule_link
-                if config.calendar_id:
-                    calendar_id_encoded = urllib.parse.quote(config.calendar_id, safe='')
-                    return f"https://calendar.google.com/calendar/u/0/r?cid={calendar_id_encoded}"
-            except (ValueError, Exception):
+                db = SessionLocal()
+                try:
+                    gym = db.query(Gym).filter(Gym.slug == gym_slug).first()
+                    if gym and gym.booking_url:
+                        return gym.booking_url
+                    if gym and gym.calendar_id:
+                        calendar_id_encoded = urllib.parse.quote(gym.calendar_id, safe='')
+                        return f"https://calendar.google.com/calendar/u/0/r?cid={calendar_id_encoded}"
+                finally:
+                    db.close()
+            except Exception:
                 pass
 
         # Last resort: create event link

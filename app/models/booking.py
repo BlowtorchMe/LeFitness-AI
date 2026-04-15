@@ -35,7 +35,7 @@ class Booking(Base):
     
     # Customer information
     customer_name = Column(String(255), nullable=False)
-    phone = Column(String(20), nullable=False, index=True)
+    phone = Column(String(20), nullable=True, index=True)
     email = Column(String(255), nullable=True)
     
     # Appointment details
@@ -54,7 +54,7 @@ class Booking(Base):
     notes = Column(Text, nullable=True)
     
     # Google Calendar event ID
-    external_booking_id = Column(String(100), nullable=True)  # Stores Google Calendar event ID
+    external_booking_id = Column(String(255), nullable=True, unique=True, index=True)
     calendar_link = Column(String(500), nullable=True)  # Google Calendar HTML link
     
     # Timestamps

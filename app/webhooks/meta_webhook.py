@@ -63,7 +63,7 @@ class MetaWebhookData(BaseModel):
     entry: Optional[list] = None
 
 
-@router.get("/")
+@router.get("")
 async def verify_webhook(
     mode: str = Query(..., alias="hub.mode"),
     token: str = Query(..., alias="hub.verify_token"),
@@ -81,7 +81,7 @@ async def verify_webhook(
         raise HTTPException(status_code=403, detail="Verification failed")
 
 
-@router.post("/")
+@router.post("")
 async def handle_webhook(request: Request):
     """
     Handle META webhook events
@@ -278,46 +278,6 @@ async def handle_messaging_event(event: Dict, channel: ConversationChannel):
 
     # Hämta gym_slug för denna lead (behövs för kalender- och bokningsanrop)
     gym_slug = _get_gym_slug_for_lead(db, lead)
-
-    # Check if user is waiting for calendar booking
-    if lead.notes == "waiting_for_calendar_booking":
-        # If user confirms they booked, acknowledge it
-        if any(word in message_text.lower() for word in ["booked", "done", "yes", "confirmed", "scheduled"]):
-            calendar_msg = "Great! I'll check the calendar and confirm your booking. You should receive a confirmation email shortly!"
-            messenger_api.send_message(recipient_id=sender_id, message=calendar_msg)
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=channel,
-                direction=MessageDirection.OUTBOUND,
-                message_text_en=calendar_msg,
-                message_text_sv=calendar_msg,
-                messenger_id=sender_id
-            )
-            lead.notes = "calendar_booking_pending_verification"
-            lead_service.db.commit()
-            return
-
-        # If user asks about booking or calendar, provide the link again
-        booking_keywords = ["book", "booking", "calendar", "appointment", "schedule", "time", "plz", "please", "link"]
-        if any(keyword in message_text.lower() for keyword in booking_keywords):
-            flow = ConversationFlow()
-            # Skickar gym_slug för att hämta rätt kalender-länk
-            calendar_link = flow._get_calendar_link(datetime.now(), gym_slug)
-
-            calendar_msg = f"Please use this link to book your appointment:\n{calendar_link}\n\nOnce you've booked, I'll confirm everything for you!"
-
-            messenger_api.send_message(recipient_id=sender_id, message=calendar_msg)
-
-            conversation_service.save_message(
-                lead_id=lead.id,
-                channel=channel,
-                direction=MessageDirection.OUTBOUND,
-                message_text_en=calendar_msg,
-                message_text_sv=calendar_msg,
-                messenger_id=sender_id
-            )
-            lead_service.db.commit()
-            return
 
     # Only process AI messages if profile is complete
     # If profile is not complete, we should have handled it above

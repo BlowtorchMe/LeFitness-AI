@@ -311,34 +311,27 @@ class GoogleCalendar:
     def watch_calendar(
         self,
         webhook_url: str,
-        expiration_hours: int = 24
+        expiration_hours: int = 24,
+        token: Optional[str] = None,
     ) -> Dict[str, any]:
         """
-        Set up push notifications for calendar changes
-        Google Calendar will send notifications to webhook_url when events change
-        
-        Args:
-            webhook_url: Your webhook endpoint URL (e.g., https://yourdomain.com/webhooks/calendar)
-            expiration_hours: How long the watch should last (max 7 days)
-        
-        Returns:
-            Dict with channel info and expiration
+        Set up push notifications for calendar changes.
+        token is returned by Google in X-Goog-Channel-Token on every notification,
+        so callers can pass a gym identifier to route incoming webhooks correctly.
         """
         try:
-            # Generate unique channel ID
             channel_id = str(uuid.uuid4())
-            
-            # Calculate expiration time (in milliseconds)
             expiration_ms = int((datetime.utcnow() + timedelta(hours=expiration_hours)).timestamp() * 1000)
-            
-            # Set up watch
+
             watch_request = {
                 'id': channel_id,
                 'type': 'web_hook',
                 'address': webhook_url,
-                'expiration': expiration_ms
+                'expiration': expiration_ms,
             }
-            
+            if token:
+                watch_request['token'] = token
+
             channel = self.service.events().watch(
                 calendarId=self.calendar_id,
                 body=watch_request

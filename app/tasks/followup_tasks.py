@@ -1,20 +1,16 @@
 """
 Follow-up background tasks
 """
-import asyncio
 from datetime import datetime, timedelta
 
 from app.celery_app import celery_app
 from app.database.database import SessionLocal
-from app.integrations.google_calendar import GoogleCalendar
 from app.integrations.messenger_api import MessengerAPI
 from app.models.lead import Lead
 from app.services.booking_service import BookingService
 from app.services.calendar_tracking import CalendarTrackingService
 from app.services.followup_service import FollowupService
-from app.services.gym_calendar_config import get_gym_calendar_config
 from app.services.lead_service import LeadService
-from app.webhooks.calendar_webhook import _process_matched_booking, ALL_GYM_SLUGS
 
 
 @celery_app.task
@@ -108,36 +104,9 @@ def scan_calendar_for_bookings():
         lead_service = LeadService(db)
         booking_service = BookingService(db)
 
-        processed = 0
-        if matches:
-            for match in matches:
-                # Vi behöver gym_slug här — i en framtida förbättring kan man
-                # matcha event till gym baserat på vilken kalender det kom ifrån.
-                # För nu används lead.selected_gym_id om det finns.
-                lead = match["lead"]
-                # Försök hitta gym_slug från leadens valda gym
-                gym_slug = None
-                if hasattr(lead, "selected_gym_id") and lead.selected_gym_id:
-                    from app.models.gym import Gym
-                    gym = db.query(Gym).filter(Gym.id == lead.selected_gym_id).first()
-                    if gym:
-                        gym_slug = gym.slug
-
-                if not gym_slug:
-                    # Fallback: använd första gymmet (inte perfekt, men bättre än krasch)
-                    gym_slug = ALL_GYM_SLUGS[0] if ALL_GYM_SLUGS else None
-
-                if gym_slug:
-                    asyncio.run(_process_matched_booking(
-                        lead,
-                        match["event"],
-                        lead_service,
-                        booking_service,
-                        gym_slug=gym_slug
-                    ))
-                    processed += 1
-
-        return {"scanned": True, "matches_found": len(matches), "processed": processed}
+        # Webhook push notifications handle booking confirmation automatically.
+        # This task only surfaces matches found by the polling fallback.
+        return {"scanned": True, "matches_found": len(matches), "processed": 0}
 
     finally:
         db.close()

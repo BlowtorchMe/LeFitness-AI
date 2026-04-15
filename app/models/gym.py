@@ -16,6 +16,7 @@ class GymSchema(BaseModel):
     location: str = Field(..., min_length=1)
     phone: Optional[str] = None
     booking_url: str = Field(..., min_length=1)
+    calendar_id: Optional[str] = None
     is_active: bool = True
 
     class Config:
@@ -32,6 +33,9 @@ class GymSchema(BaseModel):
             if isinstance(normalized.get("phone"), str):
                 phone = normalized["phone"].strip()
                 normalized["phone"] = phone or None
+            if isinstance(normalized.get("calendar_id"), str):
+                cal = normalized["calendar_id"].strip()
+                normalized["calendar_id"] = cal or None
             if isinstance(normalized.get("slug"), str):
                 normalized["slug"] = normalized["slug"].strip().lower()
             return normalized
@@ -53,6 +57,7 @@ class Gym(Base):
     location = Column(Text, nullable=False)
     phone = Column(String(50), nullable=True)
     booking_url = Column(Text, nullable=False)
+    calendar_id = Column(String(255), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -65,6 +70,7 @@ class Gym(Base):
             location=self.location,
             phone=self.phone,
             booking_url=self.booking_url,
+            calendar_id=self.calendar_id,
             is_active=bool(self.is_active),
             created_at=self.created_at,
             updated_at=self.updated_at,
