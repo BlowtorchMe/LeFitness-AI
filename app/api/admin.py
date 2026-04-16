@@ -27,9 +27,9 @@ async def admin_login(body: AdminLoginRequest, response: Response):
         key=ADMIN_COOKIE_NAME,
         value=create_admin_session(),
         httponly=True,
-        samesite="lax",
+        samesite="none",
         max_age=ADMIN_SESSION_MAX_AGE,
-        secure=False,
+        secure=True,
     )
     return {"success": True}
 
