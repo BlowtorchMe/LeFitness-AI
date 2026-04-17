@@ -88,6 +88,36 @@ async def handle_calendar_webhook(request: Request):
 
     return {"status": "ok"}
 
+def _select_customer_attendee(event: dict, gym: Gym):
+    attendees = event.get("attendees", []) or []
+    organizer_email = ((event.get("organizer") or {}).get("email") or "").strip().lower()
+    creator_email = ((event.get("creator") or {}).get("email") or "").strip().lower()
+    calendar_email = (gym.calendar_id or "").strip().lower()
+
+    blocked_emails = {email for email in [organizer_email, creator_email, calendar_email] if email}
+
+    candidates = []
+    for attendee in attendees:
+        email = (attendee.get("email") or "").strip().lower()
+        if not email:
+            continue
+        if attendee.get("self"):
+            continue
+        if attendee.get("organizer"):
+            continue
+        if email in blocked_emails:
+            continue
+        candidates.append(attendee)
+
+    if candidates:
+        return candidates[0]
+
+    for attendee in attendees:
+        email = (attendee.get("email") or "").strip().lower()
+        if email and email not in blocked_emails:
+            return attendee
+
+    return attendees[0] if attendees else None
 
 async def process_calendar_changes(gym_slug: Optional[str] = None):
     """
@@ -153,14 +183,16 @@ async def process_calendar_changes(gym_slug: Optional[str] = None):
                         pass
 
                 # Identify customer attendee — skip organizer and self (gym calendar owner)
+                # attendees = event.get("attendees", [])
+                # customer_attendee = next(
+                #     (a for a in attendees if not a.get("organizer") and not a.get("self")),
+                #     None,
+                # )
+                # # Fall back to organizer if only one attendee exists
+                # if not customer_attendee and attendees:
+                #     customer_attendee = attendees[0]
                 attendees = event.get("attendees", [])
-                customer_attendee = next(
-                    (a for a in attendees if not a.get("organizer") and not a.get("self")),
-                    None,
-                )
-                # Fall back to organizer if only one attendee exists
-                if not customer_attendee and attendees:
-                    customer_attendee = attendees[0]
+                customer_attendee = _select_customer_attendee(event, gym)
 
                 attendee_email = customer_attendee.get("email") if customer_attendee else None
                 attendee_name = customer_attendee.get("displayName") if customer_attendee else None
@@ -172,9 +204,11 @@ async def process_calendar_changes(gym_slug: Optional[str] = None):
                 )
 
                 logger.info(
-                    "Event '%s': customer_email=%s attendees=%s",
+                    "Event '%s': customer_email=%s organizer=%s creator=%s attendees=%s",
                     event_id[:12],
                     attendee_email,
+                    (event.get("organizer") or {}).get("email"),
+                    (event.get("creator") or {}).get("email"),
                     [a.get("email") for a in attendees],
                 )
 
@@ -200,14 +234,15 @@ async def process_calendar_changes(gym_slug: Optional[str] = None):
                     external_booking_id=event_id,
                     calendar_link=event.get("htmlLink"),
                 )
-                db.add(booking)
+
                 try:
-                    db.flush()
+                    with db.begin_nested():
+                        db.add(booking)
+                        db.flush()
                 except IntegrityError:
-                    # Duplicate event_id inserted concurrently — skip
-                    db.rollback()
                     logger.info("Duplicate event %s skipped (concurrent insert)", event_id)
                     continue
+
                 total_new += 1
 
                 if lead:
