@@ -117,19 +117,29 @@ app = FastAPI(
     redirect_slashes=False,
 )
 
-origins = [
-    "http://localhost:5173",
-    "https://lefitness-ai-frontend.vercel.app",
-    "https://lefitness-ai-frontend-6p4g11hcw-menoodles-projects.vercel.app"
-]
 
 # CORS middleware
 app.add_middleware(
+
     CORSMiddleware,
-    allow_origins=origins,  # Configure appropriately for production
+
+    allow_origins=[
+
+        "http://localhost:5173/",
+
+        "http://127.0.0.1:5173/",
+
+        "https://lefitness-ai-frontend.vercel.app/",  # Configure approiately for production
+
+    ],
+
+    allow_origin_regex=r"https://lefitness-ai-frontend-.%2A/.vercel/.app",
+
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+
+    allow_methods=[""],
+
+    allow_headers=[""],
 )
 
 # Include routers
