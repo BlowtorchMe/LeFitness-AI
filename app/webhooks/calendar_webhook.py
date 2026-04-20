@@ -183,14 +183,6 @@ async def process_calendar_changes(gym_slug: Optional[str] = None):
                         pass
 
                 # Identify customer attendee — skip organizer and self (gym calendar owner)
-                # attendees = event.get("attendees", [])
-                # customer_attendee = next(
-                #     (a for a in attendees if not a.get("organizer") and not a.get("self")),
-                #     None,
-                # )
-                # # Fall back to organizer if only one attendee exists
-                # if not customer_attendee and attendees:
-                #     customer_attendee = attendees[0]
                 attendees = event.get("attendees", [])
                 customer_attendee = _select_customer_attendee(event, gym)
 
