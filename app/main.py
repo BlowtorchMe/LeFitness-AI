@@ -120,7 +120,11 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://lefitness-ai-frontend.vercel.app"], # Configure appropriately for production
+    allow_origins=
+    [
+        "https://lefitness-ai-frontend.vercel.app",
+        "http://localhost:5173",
+    ], # Configure appropriately for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
