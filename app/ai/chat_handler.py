@@ -10,7 +10,7 @@ from typing import Optional, Dict, List, Tuple
 import openai
 
 from app.config import settings
-from app.ai.faq_handler import FAQHandler, FAQMatch, FAQ_DIRECT_RESPONSE_THRESHOLD
+from app.ai.faq_handler import FAQHandler, FAQMatch, FAQ_DIRECT_RESPONSE_THRESHOLD, GYM_SPECIFIC_THRESHOLD
 from app.ai.prompts import FAQ_CONTEXT, build_compact_system_prompt
 from app.ai.translations import get as t
 from app.ai.intent_recognizer import IntentRecognizer
@@ -76,6 +76,7 @@ class ChatHandler:
                 faq_match = await self.faq_handler.get_match(
                     user_message,
                     selected_gym_id=selected_gym_id,
+                    language=language,
                 )
             t2 = perf_counter()
             if self._should_direct_answer_with_faq(intent, faq_match):
@@ -275,9 +276,10 @@ class ChatHandler:
         return False
 
     def _should_direct_answer_with_faq(self, intent: str, faq_match: Optional[FAQMatch]) -> bool:
-        if not faq_match:
+        if not faq_match or faq_match.is_cross_gym:
             return False
-        if faq_match.score < FAQ_DIRECT_RESPONSE_THRESHOLD:
+        threshold = GYM_SPECIFIC_THRESHOLD if faq_match.gym_ids else FAQ_DIRECT_RESPONSE_THRESHOLD
+        if faq_match.score < threshold:
             return False
         return intent not in {"book", "cancel", "frustrated"}
 
@@ -370,7 +372,7 @@ class ChatHandler:
                 ),
             }
         )
-        if faq_match and faq_match.score >= FAQ_DIRECT_RESPONSE_THRESHOLD:
+        if faq_match and not faq_match.is_cross_gym and faq_match.score >= FAQ_DIRECT_RESPONSE_THRESHOLD:
             messages.append(
                 {
                     "role": "system",

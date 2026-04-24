@@ -23,6 +23,8 @@ faq_gyms = Table(
 class FAQSchema(BaseModel):
     question: str = Field(..., min_length=1)
     answer: str = Field(..., min_length=1)
+    question_sv: Optional[str] = None
+    answer_sv: Optional[str] = None
     video_link: Optional[str] = None
     gym_ids: List[int] = Field(default_factory=list)
 
@@ -33,9 +35,10 @@ class FAQSchema(BaseModel):
     @classmethod
     def strip_strings(cls, data):
         if isinstance(data, dict):
-            for key in ("question", "answer"):
+            for key in ("question", "answer", "question_sv", "answer_sv"):
                 if key in data and isinstance(data.get(key), str):
-                    data = {**data, key: data[key].strip()}
+                    v = data[key].strip()
+                    data = {**data, key: v if v else None}
             if "video_link" in data and isinstance(data.get("video_link"), str):
                 v = data["video_link"].strip()
                 data = {**data, "video_link": v if v else None}
@@ -54,6 +57,8 @@ class FAQSchema(BaseModel):
 
 class FAQRecord(FAQSchema):
     id: Optional[int] = None
+    question_sv: Optional[str] = None
+    answer_sv: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     gyms: List[GymRecord] = Field(default_factory=list)
@@ -65,6 +70,8 @@ class FAQ(Base):
     id = Column(Integer, primary_key=True, index=True)
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=False)
+    question_sv = Column(Text, nullable=True)
+    answer_sv = Column(Text, nullable=True)
     video_link = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -75,6 +82,8 @@ class FAQ(Base):
             id=self.id,
             question=self.question,
             answer=self.answer,
+            question_sv=self.question_sv,
+            answer_sv=self.answer_sv,
             video_link=self.video_link,
             gym_ids=[gym.id for gym in self.gyms],
             gyms=[gym.to_record() for gym in self.gyms],

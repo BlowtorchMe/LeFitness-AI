@@ -58,6 +58,8 @@ class Gym(Base):
     phone = Column(String(50), nullable=True)
     booking_url = Column(Text, nullable=False)
     calendar_id = Column(String(255), nullable=True)
+    calendar_channel_id = Column(String(255), nullable=True)
+    calendar_resource_id = Column(String(255), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

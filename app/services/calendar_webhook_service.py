@@ -30,7 +30,57 @@ class CalendarWebhookService:
     """Manages Google Calendar webhook lifecycle for all gyms"""
 
     def __init__(self):
-        self.active_watches: Dict[str, Dict[str, str]] = {}
+        self.active_watches: Dict[str, Dict] = {}
+
+    def _load_watches_from_db(self) -> None:
+        """Populate active_watches from persisted channel info in the DB."""
+        db = SessionLocal()
+        try:
+            gyms = (
+                db.query(Gym)
+                .filter(
+                    Gym.is_active.is_(True),
+                    Gym.calendar_id.isnot(None),
+                    Gym.calendar_channel_id.isnot(None),
+                    Gym.calendar_resource_id.isnot(None),
+                )
+                .all()
+            )
+            for gym in gyms:
+                try:
+                    cal = GoogleCalendar(calendar_id=gym.calendar_id)
+                    if cal.service:
+                        self.active_watches[gym.slug] = {
+                            "channel_id": gym.calendar_channel_id,
+                            "resource_id": gym.calendar_resource_id,
+                            "calendar": cal,
+                        }
+                except Exception:
+                    pass
+        finally:
+            db.close()
+
+    def _save_watch_to_db(self, gym_slug: str, channel_id: str, resource_id: str) -> None:
+        db = SessionLocal()
+        try:
+            gym = db.query(Gym).filter(Gym.slug == gym_slug).first()
+            if gym:
+                gym.calendar_channel_id = channel_id
+                gym.calendar_resource_id = resource_id
+                db.commit()
+        finally:
+            db.close()
+
+    def _clear_watch_from_db(self, gym_slug: str) -> None:
+        db = SessionLocal()
+        try:
+            gym = db.query(Gym).filter(Gym.slug == gym_slug).first()
+            if gym:
+                gym.calendar_channel_id = None
+                gym.calendar_resource_id = None
+                db.commit()
+        finally:
+            db.close()
 
     def setup_webhook(self) -> Dict:
         if not settings.google_service_account:
@@ -45,6 +95,12 @@ class CalendarWebhookService:
         if not gyms:
             logger.info("No active gyms with calendar_id configured — skipping webhook setup")
             return {"success": False, "error": "No gyms with calendar configured"}
+
+        # Load any persisted watches from a previous run and stop them first
+        self._load_watches_from_db()
+        if self.active_watches:
+            logger.info("Stopping %d existing watch(es) before creating new ones", len(self.active_watches))
+            self.stop_webhook()
 
         results = {}
         any_success = False
@@ -71,11 +127,14 @@ class CalendarWebhookService:
             result = calendar.watch_calendar(webhook_url, expiration_hours=168, token=gym_slug)
 
             if result.get("success"):
+                channel_id = result.get("channel_id")
+                resource_id = result.get("resource_id")
                 self.active_watches[gym_slug] = {
-                    "channel_id": result.get("channel_id"),
-                    "resource_id": result.get("resource_id"),
+                    "channel_id": channel_id,
+                    "resource_id": resource_id,
                     "calendar": calendar,
                 }
+                self._save_watch_to_db(gym_slug, channel_id, resource_id)
                 logger.info(
                     "Calendar webhook for '%s' set up successfully. Expires: %s",
                     gym_slug,
@@ -110,6 +169,7 @@ class CalendarWebhookService:
                 result = calendar.stop_watch(channel_id, resource_id)
                 if result.get("success"):
                     logger.info("Calendar webhook stopped for gym '%s'", gym_slug)
+                    self._clear_watch_from_db(gym_slug)
                 results[gym_slug] = result
             except Exception as e:
                 logger.error("Error stopping webhook for '%s': %s", gym_slug, e)

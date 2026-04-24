@@ -20,6 +20,7 @@ from app.config import settings
 EMBEDDING_DIMENSION = 1536
 logger = logging.getLogger(__name__)
 FAQ_DIRECT_RESPONSE_THRESHOLD = 0.6
+GYM_SPECIFIC_THRESHOLD = 0.45  # Lower threshold for gym-specific FAQs
 
 DIRECT_FAQ_RULES = (
     # -----------------------------------------------------------------------
@@ -217,6 +218,7 @@ class FAQMatch:
     video_link: Optional[str] = None
     answer_sv: Optional[str] = None
     gym_ids: tuple[int, ...] = ()
+    is_cross_gym: bool = False
 
 
 def _ensure_pg_conn_str() -> None:
@@ -281,12 +283,15 @@ def _match_for_selected_gym(gym_ids: Sequence[int], selected_gym_id: Optional[in
     return selected_gym_id in gym_ids
 
 
-def _retrieve_match_sync(question: str, selected_gym_id: Optional[int] = None) -> Optional[FAQMatch]:
+def _retrieve_match_sync(question: str, selected_gym_id: Optional[int] = None, language: str = "en") -> Optional[FAQMatch]:
     _ensure_pg_conn_str()
-    direct_match = _get_direct_match(question)
-    if direct_match and _match_for_selected_gym(direct_match.gym_ids, selected_gym_id):
-        logger.info("faq_direct_keyword_match score=1.000")
-        return direct_match
+    # Keyword shortcuts have no gym awareness — skip them when a gym is selected
+    # so gym-specific DB FAQs always take priority.
+    if selected_gym_id is None:
+        direct_match = _get_direct_match(question)
+        if direct_match:
+            logger.info("faq_direct_keyword_match score=1.000")
+            return direct_match
     if not settings.openai_api_key:
         return None
 
@@ -301,7 +306,7 @@ def _retrieve_match_sync(question: str, selected_gym_id: Optional[int] = None) -
         if not embedding:
             return None
 
-        result = retriever.run(query_embedding=embedding, top_k=5)
+        result = retriever.run(query_embedding=embedding, top_k=10)
         t3 = perf_counter()
         docs = result.get("documents") or []
         logger.info(
@@ -312,18 +317,62 @@ def _retrieve_match_sync(question: str, selected_gym_id: Optional[int] = None) -
             float(getattr(docs[0], "score", 0.0) or 0.0) if docs else 0.0,
             selected_gym_id,
         )
+        # Collect best match in each category (docs are sorted by score descending)
+        best_gym_specific: Optional[FAQMatch] = None
+        best_global: Optional[FAQMatch] = None
+        best_cross_gym: Optional[FAQMatch] = None
+
         for doc in docs:
+            doc_lang = doc.meta.get("lang") or "en"
+            if doc_lang != language:
+                continue
             answer = doc.meta.get("answer")
+            if not answer:
+                continue
             score = float(getattr(doc, "score", 0.0) or 0.0)
             video_link = doc.meta.get("video_link") or None
-            gym_ids = tuple(int(gym_id) for gym_id in (doc.meta.get("gym_ids") or []) if gym_id)
-            if answer and _match_for_selected_gym(gym_ids, selected_gym_id):
-                return FAQMatch(
-                    answer=answer,
-                    score=score,
-                    video_link=video_link,
-                    gym_ids=gym_ids,
-                )
+            answer_sv = doc.meta.get("answer_sv") or None
+            gym_ids = tuple(int(gid) for gid in (doc.meta.get("gym_ids") or []) if gid)
+
+            if gym_ids:
+                if selected_gym_id is not None and selected_gym_id in gym_ids:
+                    # Matches selected gym
+                    if best_gym_specific is None and score >= GYM_SPECIFIC_THRESHOLD:
+                        best_gym_specific = FAQMatch(
+                            answer=answer, score=score, video_link=video_link,
+                            answer_sv=answer_sv, gym_ids=gym_ids,
+                        )
+                elif selected_gym_id is not None and selected_gym_id not in gym_ids:
+                    # Belongs to a different gym — use same lower threshold as gym-specific
+                    if best_cross_gym is None and score >= GYM_SPECIFIC_THRESHOLD:
+                        best_cross_gym = FAQMatch(
+                            answer=answer, score=score, video_link=video_link,
+                            answer_sv=answer_sv, gym_ids=gym_ids, is_cross_gym=True,
+                        )
+            else:
+                # Global FAQ
+                if best_global is None and score >= FAQ_DIRECT_RESPONSE_THRESHOLD:
+                    best_global = FAQMatch(
+                        answer=answer, score=score, video_link=video_link,
+                        answer_sv=answer_sv, gym_ids=gym_ids,
+                    )
+
+        if best_gym_specific:
+            logger.info("faq_gym_specific_match score=%.3f gym_ids=%s", best_gym_specific.score, best_gym_specific.gym_ids)
+            return best_gym_specific
+        if best_global:
+            logger.info("faq_global_match score=%.3f", best_global.score)
+            return best_global
+        if best_cross_gym:
+            logger.info("faq_cross_gym_match score=%.3f gym_ids=%s", best_cross_gym.score, best_cross_gym.gym_ids)
+            return best_cross_gym
+
+        # No pgvector match — fall back to keyword shortcuts
+        if selected_gym_id is not None:
+            direct_match = _get_direct_match(question)
+            if direct_match:
+                logger.info("faq_direct_keyword_fallback score=1.000")
+                return direct_match
         return None
     except Exception:
         logger.exception("faq_retrieve_failed")
@@ -333,17 +382,18 @@ def _retrieve_match_sync(question: str, selected_gym_id: Optional[int] = None) -
 class FAQHandler:
     """Handles FAQ queries via DB-backed pgvector RAG."""
 
-    async def get_match(self, question: str, selected_gym_id: Optional[int] = None) -> Optional[FAQMatch]:
+    async def get_match(self, question: str, selected_gym_id: Optional[int] = None, language: str = "en") -> Optional[FAQMatch]:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             _retrieve_match_sync,
             question.strip() or "",
             selected_gym_id,
+            language,
         )
 
-    async def get_answer(self, question: str, selected_gym_id: Optional[int] = None) -> Optional[str]:
-        match = await self.get_match(question, selected_gym_id=selected_gym_id)
+    async def get_answer(self, question: str, selected_gym_id: Optional[int] = None, language: str = "en") -> Optional[str]:
+        match = await self.get_match(question, selected_gym_id=selected_gym_id, language=language)
         return match.answer if match else None
 
     @staticmethod

@@ -40,11 +40,29 @@ def init_db():
         conn.commit()
 
     Base.metadata.create_all(bind=engine)
-    ensure_schema()
+
 
 def ensure_schema() -> None:
-    """Create any missing tables. Safe to call on every startup."""
+    """Create any missing tables and add any missing columns. Safe to call on every startup."""
     Base.metadata.create_all(bind=engine)
+    _migrate_columns()
+
+
+def _migrate_columns() -> None:
+    """Add new columns to existing tables when they don't exist yet."""
+    migrations = [
+        ("gyms", "calendar_channel_id", "VARCHAR(255)"),
+        ("gyms", "calendar_resource_id", "VARCHAR(255)"),
+    ]
+    with engine.connect() as conn:
+        for table, column, col_type in migrations:
+            exists = conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = :t AND column_name = :c"
+            ), {"t": table, "c": column}).fetchone()
+            if not exists:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+        conn.commit()
 
 
 def get_db() -> Session:

@@ -9,9 +9,12 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+import asyncio
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
 from app.ai.chat_handler import ChatHandler
 from app.ai.translations import get as t
@@ -21,6 +24,7 @@ from app.models.gym import Gym
 from app.models.lead import LeadStatus
 from app.services.conversation_service import ConversationService
 from app.services.lead_service import LeadService
+from app.sse_manager import sse_manager
 
 router = APIRouter()
 chat_handler = ChatHandler()
@@ -756,18 +760,9 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
     responses: List[str] = []
     options: List[ChatOption] = []
 
-    if not request.session_id and not message_text and not action:
-        return ChatResponse(
-            session_id=session_id,
-            messages=_initial_messages(requested_lang),
-            language=requested_lang,
-        )
-
     lead_service = LeadService(db)
     conversation_service = ConversationService(db)
     lead = lead_service.get_lead_by_messenger_id(sender_id)
-    if not message_text and not action and not lead:
-        return ChatResponse(session_id=session_id, messages=_initial_messages(requested_lang), language=requested_lang)
 
     active_gyms = _get_active_gyms(db)
 
@@ -789,9 +784,6 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
             if booking_confirmed_pending:
                 confirm_en = t("en", "booking_confirmed_webhook", dt=_format_booking_dt(lead.booking_date, "en"))
                 confirm_sv = t("sv", "booking_confirmed_webhook", dt=_format_booking_dt(lead.booking_date, "sv"))
-                _save_outbound_message(
-                    conversation_service, lead.id, sender_id, confirm_en, confirm_sv, commit=False
-                )
                 lead.notes = None
                 lead.conversation_state = "answering_questions"
                 db.commit()
@@ -1110,6 +1102,39 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
         db.commit()
         return _response_from_state(session_id, responses, lead, current_gym)
 
+    faq_match = analysis.faq_match
+    if resolved_gym and faq_match and faq_match.is_cross_gym:
+        other_gym = next((g for g in active_gyms if g.id in faq_match.gym_ids), None)
+        if other_gym:
+            resp_en = (
+                f"That's not available at {resolved_gym.name}. "
+                f"However, {other_gym.name} does offer this: {faq_match.answer} "
+                f"If you'd like more details, feel free to call {other_gym.name} directly."
+            )
+            resp_sv = (
+                f"Det erbjuds inte på {resolved_gym.name}. "
+                f"Däremot har {other_gym.name} det: {faq_match.answer_sv or faq_match.answer} "
+                f"Ring gärna {other_gym.name} direkt för mer information."
+            )
+        else:
+            phone = resolved_gym.phone or ""
+            resp_en = (
+                f"I'm not sure we offer that at {resolved_gym.name}. "
+                f"For the most accurate information, please call us"
+                + (f" at {phone}." if phone else ".")
+            )
+            resp_sv = (
+                f"Jag är inte säker på att vi erbjuder det på {resolved_gym.name}. "
+                f"För korrekt information, ring oss"
+                + (f" på {phone}." if phone else ".")
+            )
+        _append_bot_message(
+            responses, conversation_service, lead, sender_id, lang,
+            resp_en, resp_sv, commit=False,
+        )
+        db.commit()
+        return _response_from_state(session_id, responses, lead, current_gym)
+
     if analysis.fast_path_response:
         ai_response = analysis.fast_path_response
     else:
@@ -1206,3 +1231,45 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
     db.commit()
 
     return _response_from_state(session_id, responses, lead, current_gym)
+
+
+@router.get("/stream/{session_id}")
+async def stream_events(session_id: str, request: Request):
+    """SSE endpoint — client connects once and receives push events (e.g. booking_confirmed)."""
+    async def event_generator():
+        q = sse_manager.subscribe(session_id)
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=25)
+                    yield {"event": event.get("type", "message"), "data": event.get("data", "")}
+                except asyncio.TimeoutError:
+                    # Heartbeat to keep the connection alive
+                    yield {"event": "ping", "data": ""}
+        finally:
+            sse_manager.unsubscribe(session_id)
+
+    return EventSourceResponse(event_generator())
+
+
+@router.post("/test-sse/{session_id}", include_in_schema=False)
+async def test_sse_push(session_id: str):
+    """Dev-only: simulate a calendar booking confirmation to test SSE delivery."""
+    from datetime import datetime as _dt
+    from app.database.database import SessionLocal as _SL
+    from app.models.lead import Lead
+    _db = _SL()
+    try:
+        lead = _db.query(Lead).filter(Lead.messenger_id == session_id).first()
+        if not lead:
+            return {"pushed": False, "error": "no lead found for session"}
+        lead.notes = "calendar_booking_saved:test"
+        lead.booking_date = _dt.utcnow()
+        lead.conversation_state = "booking_confirmed"
+        _db.commit()
+    finally:
+        _db.close()
+    pushed = sse_manager.push(session_id, {"type": "booking_confirmed", "data": ""})
+    return {"pushed": pushed, "session_id": session_id}

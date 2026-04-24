@@ -24,19 +24,32 @@ def _ensure_pg_conn_str() -> None:
         os.environ["PG_CONN_STR"] = settings.database_url
 
 
-def _doc_id_for_faq(faq_id: int) -> str:
-    return f"faq:{faq_id}"
-
-
-def _faq_to_document(row: FAQ) -> Document:
-    content = f"{row.question} {row.answer}".strip()
-    meta = {
+def _shared_meta(row: FAQ) -> dict:
+    return {
         "faq_id": row.id,
         "answer": row.answer,
+        "answer_sv": row.answer_sv or "",
         "video_link": row.video_link or "",
         "gym_ids": [gym.id for gym in getattr(row, "gyms", [])],
     }
-    return Document(id=_doc_id_for_faq(row.id), content=content, meta=meta)
+
+
+def _faq_to_documents(row: FAQ) -> List[Document]:
+    docs = []
+    meta = _shared_meta(row)
+    if row.question and row.answer:
+        docs.append(Document(
+            id=f"faq:{row.id}:en",
+            content=f"{row.question} {row.answer}",
+            meta={**meta, "lang": "en"},
+        ))
+    if row.question_sv and row.answer_sv:
+        docs.append(Document(
+            id=f"faq:{row.id}:sv",
+            content=f"{row.question_sv} {row.answer_sv}",
+            meta={**meta, "lang": "sv"},
+        ))
+    return docs
 
 
 def _get_store(recreate_table: bool = False) -> PgvectorDocumentStore:
@@ -54,11 +67,12 @@ def _get_embedder() -> OpenAIDocumentEmbedder:
     )
 
 
-def _delete_all_docs_for_faq(store: PgvectorDocumentStore, faq_id: int, keep_doc_id: str | None = None) -> int:
+def _delete_all_docs_for_faq(store: PgvectorDocumentStore, faq_id: int, keep_doc_ids: set | None = None) -> int:
     docs = store.filter_documents(
         filters={"field": "meta.faq_id", "operator": "==", "value": faq_id}
     )
-    doc_ids = [d.id for d in docs if d.id and d.id != keep_doc_id]
+    keep = keep_doc_ids or set()
+    doc_ids = [d.id for d in docs if d.id and d.id not in keep]
     if not doc_ids:
         return 0
     store.delete_documents(doc_ids)
@@ -69,36 +83,39 @@ def _load_faq_documents() -> List[Document]:
     db = SessionLocal()
     try:
         rows = db.query(FAQ).order_by(FAQ.id).all()
-        return [_faq_to_document(row) for row in rows]
+        docs = []
+        for row in rows:
+            docs.extend(_faq_to_documents(row))
+        return docs
     finally:
         db.close()
 
 
 def upsert_faq_embedding(faq: FAQ) -> Dict[str, Any]:
-    """
-    Embed and upsert a single FAQ row. Also removes old duplicate docs for the same faq_id.
-    """
+    """Embed and upsert a single FAQ row (up to 2 docs: EN + SV). Removes stale docs."""
     _ensure_pg_conn_str()
     if not settings.openai_api_key:
         return {"success": False, "count": 0, "error": "OPENAI_API_KEY not set"}
     try:
+        docs = _faq_to_documents(faq)
+        if not docs:
+            return {"success": True, "count": 0, "error": None}
         store = _get_store(recreate_table=False)
         embedder = _get_embedder()
-        embedded = embedder.run(documents=[_faq_to_document(faq)])
+        embedded = embedder.run(documents=docs)
         out_docs = embedded.get("documents") or []
         if not out_docs:
             return {"success": False, "count": 0, "error": "Embedding failed: no documents produced"}
         store.write_documents(out_docs, policy=DuplicatePolicy.OVERWRITE)
-        deleted = _delete_all_docs_for_faq(store, faq.id, keep_doc_id=_doc_id_for_faq(faq.id))
+        keep = {d.id for d in out_docs if d.id}
+        deleted = _delete_all_docs_for_faq(store, faq.id, keep_doc_ids=keep)
         return {"success": True, "count": len(out_docs), "deleted": deleted, "error": None}
     except Exception as e:
         return {"success": False, "count": 0, "error": str(e)}
 
 
 def delete_faq_embeddings(faq_id: int) -> Dict[str, Any]:
-    """
-    Delete all embedding docs tied to a FAQ id (stable-id and legacy docs).
-    """
+    """Delete all embedding docs tied to a FAQ id."""
     _ensure_pg_conn_str()
     try:
         store = _get_store(recreate_table=False)
@@ -109,10 +126,7 @@ def delete_faq_embeddings(faq_id: int) -> Dict[str, Any]:
 
 
 def run_indexer(recreate_table: bool = False) -> Dict[str, Any]:
-    """
-    Load FAQs from DB, embed with OpenAI, write to pgvector.
-    Returns dict with success, count, error.
-    """
+    """Load FAQs from DB, embed with OpenAI, write to pgvector."""
     _ensure_pg_conn_str()
     if not settings.openai_api_key:
         return {"success": False, "count": 0, "error": "OPENAI_API_KEY not set"}

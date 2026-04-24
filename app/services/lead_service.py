@@ -2,6 +2,7 @@
 Lead management service
 """
 from typing import Optional, List, Dict
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models.lead import Lead, LeadStatus
 from app.database.database import get_db
@@ -59,7 +60,7 @@ class LeadService:
     
     def get_lead_by_email(self, email: str) -> Optional[Lead]:
         """Get lead by email address"""
-        return self.db.query(Lead).filter(Lead.email == email).first()
+        return self.db.query(Lead).filter(func.lower(Lead.email) == email.lower()).first()
     
     def get_lead(self, lead_id: int) -> Optional[Lead]:
         """Get lead by ID"""

@@ -2,11 +2,12 @@
 Google Calendar webhook handler.
 Receives push notifications when calendar events are created or updated.
 """
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from sqlalchemy.exc import IntegrityError
 
 from app.database.database import SessionLocal
@@ -20,6 +21,10 @@ from app.services.lead_service import LeadService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Per-gym debounce: skip processing if same gym was processed within this window
+_DEBOUNCE_SECONDS = 30
+_last_processed: dict[str, datetime] = {}
 
 
 def _get_calendar_for_gym(gym_slug: str, db) -> Optional[GoogleCalendar]:
@@ -66,25 +71,24 @@ def _save_confirmation_message(db, lead, event_dt: datetime) -> None:
 
 
 @router.post("")
-async def handle_calendar_webhook(request: Request):
+async def handle_calendar_webhook(request: Request, background_tasks: BackgroundTasks):
     headers = dict(request.headers)
     resource_state = headers.get("x-goog-resource-state") or headers.get("X-Goog-Resource-State")
-    # gym_slug is stored as the channel token when the watch is registered
     gym_slug = headers.get("x-goog-channel-token") or headers.get("X-Goog-Channel-Token")
-    logger.info("Calendar webhook received: resource_state=%s gym=%s", resource_state, gym_slug)
+    logger.debug("Calendar webhook received: resource_state=%s gym=%s", resource_state, gym_slug)
 
     if resource_state == "sync":
-        return {"status": "ok", "message": "sync acknowledged"}
+        return {"status": "ok"}
 
     if resource_state in ["exists", "not_exists"]:
-        if not gym_slug:
-            logger.warning("No gym token in webhook headers — falling back to full scan")
-        try:
-            await process_calendar_changes(gym_slug=gym_slug)
-            return {"status": "ok", "message": "change processed"}
-        except Exception as e:
-            logger.exception("Error processing calendar changes")
-            return {"status": "error", "message": str(e)}
+        key = gym_slug or "__all__"
+        now = datetime.utcnow()
+        last = _last_processed.get(key)
+        if last and (now - last).total_seconds() < _DEBOUNCE_SECONDS:
+            logger.debug("Calendar webhook debounced for gym=%s", gym_slug)
+            return {"status": "ok"}
+        _last_processed[key] = now
+        background_tasks.add_task(_run_process_calendar_changes, gym_slug)
 
     return {"status": "ok"}
 
@@ -119,6 +123,11 @@ def _select_customer_attendee(event: dict, gym: Gym):
 
     return attendees[0] if attendees else None
 
+def _run_process_calendar_changes(gym_slug: Optional[str]) -> None:
+    """Sync wrapper so FastAPI BackgroundTasks can call the async function."""
+    asyncio.run(process_calendar_changes(gym_slug=gym_slug))
+
+
 async def process_calendar_changes(gym_slug: Optional[str] = None):
     """
     Fetch new events from calendar(s) and save them as bookings.
@@ -133,6 +142,7 @@ async def process_calendar_changes(gym_slug: Optional[str] = None):
         end_time = datetime.utcnow() + timedelta(days=90)
         total_new = 0
         total_matched = 0
+        matched_session_ids: list[str] = []
 
         if gym_slug:
             slugs_to_check = [gym_slug]
@@ -155,7 +165,7 @@ async def process_calendar_changes(gym_slug: Optional[str] = None):
                 continue
 
             events = calendar.get_recent_events(start_time=start_time, end_time=end_time)
-            logger.info("Gym '%s': %d events fetched", gym_slug, len(events))
+            logger.debug("Gym '%s': %d events fetched", gym_slug, len(events))
 
             for event in events:
                 event_id = event.get("id")
@@ -245,9 +255,20 @@ async def process_calendar_changes(gym_slug: Optional[str] = None):
                     lead.notes = f"calendar_booking_saved:{event_id}"
                     lead.conversation_state = "booking_confirmed"
                     _save_confirmation_message(db, lead, event_dt)
+                    if lead.messenger_id:
+                        matched_session_ids.append(lead.messenger_id)
 
         db.commit()
-        logger.info("Calendar sync done: %d new bookings, %d leads matched", total_new, total_matched)
+        if total_new or total_matched:
+            logger.info("Calendar sync done: %d new bookings, %d leads matched", total_new, total_matched)
+        else:
+            logger.debug("Calendar sync done: no new bookings")
+
+        # Push SSE after commit so the confirmation message is visible when frontend fetches
+        if matched_session_ids:
+            from app.sse_manager import sse_manager
+            for sid in matched_session_ids:
+                sse_manager.push(sid, {"type": "booking_confirmed", "data": ""})
 
     except Exception:
         logger.exception("Calendar webhook processing failed")
